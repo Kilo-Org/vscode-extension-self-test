@@ -14,7 +14,7 @@ This lets another agent discover the platform-specific installer, install the ru
 
 ### Manual installation
 
-Install Node.js and npm first. Clone the repository anywhere under your user directory, then run the installer. The installer copies the generic `vscode-self-test` skill and its runtime scripts into the normal user-level Kilo config directory. It is safe to rerun after pulling updates.
+Install Node.js and npm first. Clone the repository anywhere under your user directory, then run the installer. The installer copies the generic `vscode-self-test` skill and its runtime scripts into the normal user-level Kilo config directory, installs dependencies, and runs a runtime self-check. It is safe to rerun after pulling updates.
 
 #### macOS and Linux
 

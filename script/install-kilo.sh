@@ -14,10 +14,11 @@ mkdir -p "$KILO_HOME/skills" "$KILO_HOME/scripts"
 rm -rf "$SKILLS" "$SCRIPTS"
 cp -R "$SOURCE" "$SKILLS"
 cp -R "$ROOT/src" "$SCRIPTS"
-cp "$ROOT/package.json" "$ROOT/package-lock.json" "$SCRIPTS/"
+cp "$ROOT/package.json" "$ROOT/package-lock.json" "$ROOT/self-check.mjs" "$SCRIPTS/"
 (
   cd "$SCRIPTS"
   npm install --omit=dev
+  npm run self-check
 )
 
 printf 'Installed Kilo skill: %s\n' "$SKILLS"

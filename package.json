@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "self-check": "node src/engine-mcp.mjs --self-check && node src/mcp.mjs --self-check"
+    "self-check": "node self-check.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.25.2",

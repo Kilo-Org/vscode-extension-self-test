@@ -12,10 +12,11 @@ New-Item -ItemType Directory -Force -Path (Join-Path $KiloHome "skills"), (Join-
 Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $Skills, $Scripts
 Copy-Item -Recurse $Source $Skills
 Copy-Item -Recurse (Join-Path $Root "src") $Scripts
-Copy-Item (Join-Path $Root "package.json"), (Join-Path $Root "package-lock.json") $Scripts
+Copy-Item (Join-Path $Root "package.json"), (Join-Path $Root "package-lock.json"), (Join-Path $Root "self-check.mjs") $Scripts
 Push-Location $Scripts
 try {
   npm install --omit=dev
+  npm run self-check
 } finally {
   Pop-Location
 }

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { cfg } from "./config.mjs";
@@ -27,7 +27,8 @@ export function readState() {
 
 export function writeState(value) {
   ensureStateDir();
-  writeFileSync(statePath, JSON.stringify(value, null, 2) + "\n");
+  writeFileSync(statePath, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
+  chmodSync(statePath, 0o600);
 }
 
 export function removeState() {
