@@ -737,7 +737,7 @@ st stop-vscode --cleanup true
 st stop
 ```
 
-`stop-vscode --cleanup true` removes the isolated VS Code user-data, extension, and VSIX temp directories created by the harness. `stop` terminates the per-worktree daemon. If a daemon crash leaves stale state, inspect `~/.config/kilo/state/vscode-self-test/<repo-hash>/state.json`, stop any surviving harness process, then remove only that stale harness state file before restarting.
+`stop-vscode --cleanup true` removes the isolated VS Code user-data, extension, and VSIX temp directories created by the harness. `stop` terminates the per-worktree daemon. If a daemon crash leaves stale state, inspect `~/.config/vscode-extension-self-test/state/<repo-hash>/state.json`, stop any surviving harness process, then remove only that stale harness state file before restarting.
 
 ## Before/after optimization loop
 
