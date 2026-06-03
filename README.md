@@ -24,6 +24,16 @@ Set-Location "$HOME\vscode-extension-self-test"
 
 The default destination on every platform is `~/.config/kilo/`. Set `KILO_HOME` before running the installer only when your Kilo user config lives elsewhere. Restart Kilo after installation so it discovers the new skill.
 
+Developers working on the Kilocode VS Code extension can install the detailed Kilo-specific playbook instead of the generic skill:
+
+```bash
+./script/install-kilo.sh --kilo-recipe
+```
+
+```powershell
+.\script\install-kilo.ps1 -KiloRecipe
+```
+
 The installed CLI is available at:
 
 ```bash
@@ -62,7 +72,7 @@ Use `node src/cli.mjs help` for the complete CLI. Every command prints JSON. `--
 
 ## Agent Skill
 
-The installers copy `skills/vscode-self-test/` to `~/.config/kilo/skills/vscode-self-test/`. The generic skill documents the stable observe, act, verify workflow. `recipes/kilo/` contains the Kilo-specific playbook and example configuration for developers working in the Kilocode monorepo.
+The installers copy `skills/vscode-self-test/` to `~/.config/kilo/skills/vscode-self-test/` by default. The generic skill documents the stable observe, act, verify workflow. Pass the Kilo recipe flag to install `recipes/kilo/` at the same destination when working in the Kilocode monorepo.
 
 ## MCP
 
