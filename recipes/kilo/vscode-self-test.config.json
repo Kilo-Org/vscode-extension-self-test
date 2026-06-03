@@ -1,0 +1,15 @@
+{
+  "extensionRoot": "packages/kilo-vscode",
+  "workspace": ".",
+  "extensionId": "kilocode.kilo-code",
+  "build": { "command": ["bun", "run", "package"] },
+  "vsix": { "command": ["bun", "x", "vsce", "package", "--no-dependencies", "--skip-license", "-o", "{outDir}/"] },
+  "profile": { "markPrefix": "kilo." },
+  "openers": {
+    "sidebarCommand": "Kilo Code (NEW): Focus on Kilo Code (NEW) View",
+    "agentManagerLabel": "Agent Manager",
+    "agentManagerFrameSelector": ".am-layout [data-sidebar-id=\"local\"]",
+    "settingsSelector": "a[aria-label=\"Settings\"]",
+    "settingsFrameSelector": "[data-component=\"tabs\"][data-variant=\"settings\"]"
+  }
+}

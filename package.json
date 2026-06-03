@@ -1,0 +1,17 @@
+{
+  "name": "@kilo-org/vscode-extension-self-test",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "self-check": "node src/engine-mcp.mjs --self-check && node src/mcp.mjs --self-check"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.25.2",
+    "@playwright/test": "^1.58.2",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.6.2"
+  }
+}

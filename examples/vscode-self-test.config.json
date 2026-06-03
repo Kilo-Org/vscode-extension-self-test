@@ -1,0 +1,8 @@
+{
+  "extensionRoot": ".",
+  "workspace": ".",
+  "extensionId": "publisher.extension-name",
+  "build": { "command": ["npm", "run", "package"] },
+  "vsix": { "command": ["npx", "vsce", "package", "--no-dependencies", "--skip-license", "-o", "{outDir}/"] },
+  "profile": { "markPrefix": "selftest." }
+}
