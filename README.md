@@ -4,9 +4,19 @@ Private shared harness for testing and profiling VS Code extensions from a real 
 
 ## Install For Kilo
 
+The easiest installation path is to point Kilo at this repository and ask it to install the skill at user level. Paste this into a Kilo session:
+
+```text
+Install the vscode-self-test skill from https://github.com/Kilo-Org/vscode-extension-self-test at user level. Clone or update the repository under my user directory, run the installer for my platform, do not modify unrelated Kilo configuration or project files, and verify the installed CLI with its help command. Use the detailed Kilo recipe when this workspace is the Kilocode monorepo. Tell me which files were installed and whether verification passed.
+```
+
+This lets another agent discover the platform-specific installer, install the runtime dependencies, and verify the result without needing prior context.
+
+### Manual installation
+
 Install Node.js and npm first. Clone the repository anywhere under your user directory, then run the installer. The installer copies the generic `vscode-self-test` skill and its runtime scripts into the normal user-level Kilo config directory. It is safe to rerun after pulling updates.
 
-### macOS and Linux
+#### macOS and Linux
 
 ```bash
 git clone git@github.com:Kilo-Org/vscode-extension-self-test.git ~/vscode-extension-self-test
@@ -14,7 +24,7 @@ cd ~/vscode-extension-self-test
 ./script/install-kilo.sh
 ```
 
-### Windows PowerShell
+#### Windows PowerShell
 
 ```powershell
 git clone git@github.com:Kilo-Org/vscode-extension-self-test.git "$HOME\vscode-extension-self-test"
