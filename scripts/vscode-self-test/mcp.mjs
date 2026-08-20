@@ -180,10 +180,11 @@ server.registerTool(
 const tools = [
   [
     "launch-vscode",
-    "Build the extension, install or load it into an isolated VS Code instance, and launch it for manual testing.",
+    "Build the extension, install or load it into an isolated VS Code instance, and launch it for testing. Headless mode hides VS Code windows while keeping the renderer available for Playwright.",
     {
       appPath: z.string().optional(),
       build: z.boolean().optional(),
+      headless: z.boolean().optional(),
       mode: z.enum(["dev", "vsix"]).optional(),
       waitMs: z.number().int().positive().max(60000).optional(),
       workspace: z.string().optional(),

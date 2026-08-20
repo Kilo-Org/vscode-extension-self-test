@@ -24,6 +24,8 @@ st stop
 
 Use `--mode vsix` when packaged-extension behavior matters. Set `VSCODE_EXEC_PATH` if VS Code is not installed in a standard location.
 
+Pass `--headless true` for automated runs. This hides VS Code windows while keeping the renderer available to Playwright. Electron still needs a display server on Linux, so use Xvfb in displayless CI environments.
+
 # Observe, act, verify
 
 1. Launch isolated VS Code and open the surface with `run-command` or normal UI clicks.

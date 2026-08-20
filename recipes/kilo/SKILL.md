@@ -84,9 +84,11 @@ If a feature has no opener, run the command or click the UI that opens it, then 
 start                                          # Start per-worktree daemon
 stop                                           # Stop daemon and VS Code
 status                                         # Check daemon and session status
-launch-vscode [--mode dev|vsix] [--build true|false] [--workspace PATH]
+launch-vscode [--mode dev|vsix] [--build true|false] [--headless true|false] [--workspace PATH]
 stop-vscode [--cleanup true|false]
 ```
+
+Pass `--headless true` to launch VS Code with its windows hidden while keeping the renderer available to Playwright. This is useful for automated runs. Electron still needs a display server on Linux, so use Xvfb in displayless CI environments.
 
 ## Observe (screenshots saved to disk, path in JSON output at structuredContent.path)
 

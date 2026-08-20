@@ -95,7 +95,7 @@ node ~/.config/kilo/scripts/vscode-self-test/cli.mjs stop-vscode --cleanup true
 node ~/.config/kilo/scripts/vscode-self-test/cli.mjs stop
 ```
 
-Use `node ~/.config/kilo/scripts/vscode-self-test/cli.mjs help` for the complete CLI. Every operational command prints JSON. `--mode dev` loads the extension development directory. `--mode vsix` packages and installs a VSIX into the isolated profile.
+Use `node ~/.config/kilo/scripts/vscode-self-test/cli.mjs help` for the complete CLI. Every operational command prints JSON. `--mode dev` loads the extension development directory. `--mode vsix` packages and installs a VSIX into the isolated profile. Pass `--headless true` to hide VS Code windows while keeping Playwright automation and screenshots available. Linux displayless CI environments still need Xvfb.
 
 ## MCP
 

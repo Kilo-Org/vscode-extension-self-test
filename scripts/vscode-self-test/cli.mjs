@@ -187,7 +187,7 @@ function help() {
   start
   stop
   status
-  launch-vscode [--mode dev|vsix] [--build true|false] [--workspace PATH]
+  launch-vscode [--mode dev|vsix] [--build true|false] [--headless true|false] [--workspace PATH]
   stop-vscode [--cleanup true|false]
   profile-start [--frame MATCH] [--trace true|false] [--cpu true|false] [--interval MICROSECONDS]
   profile-stop [--dir DIR] [--trace-path FILE] [--cpu-path FILE] [--metadata-path FILE]
@@ -265,6 +265,7 @@ if (command === "launch-vscode" || command === "restart-vscode") {
   await tool("launch-vscode", {
     appPath: str(options, "app-path", undefined),
     build: bool(options, "build", true),
+    headless: bool(options, "headless", false),
     mode: str(options, "mode", "dev"),
     waitMs: num(options, "wait-ms", 3000),
     workspace: options["workspace"] ? resolve(options["workspace"]) : undefined,

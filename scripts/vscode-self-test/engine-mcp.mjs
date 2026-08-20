@@ -26,7 +26,7 @@ import { repo, root, scriptDir } from "./common.mjs";
 import { cfg } from "./config.mjs";
 
 const execFileP = promisify(execFile);
-const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+const pkg = JSON.parse(readFileSync(join(scriptDir, "package.json"), "utf8"));
 
 const state = {
   console: [],
@@ -281,6 +281,7 @@ async function launchVsCode(input) {
   const userDir = temp("vscode-self-test-user-");
   const extDir = temp("vscode-self-test-ext-");
   const outDir = mode === "vsix" ? temp("vscode-self-test-vsix-") : null;
+  const headless = input.headless ?? false;
   const waitMs = input.waitMs ?? 5000;
 
   writeSettings(userDir);
@@ -315,6 +316,9 @@ async function launchVsCode(input) {
     env,
     executablePath: appPath,
   });
+  if (headless) {
+    await hide(app);
+  }
 
   const page = await app.firstWindow();
   state.console = [];
@@ -342,6 +346,7 @@ async function launchVsCode(input) {
     appPath,
     cliPath,
     extDir,
+    headless,
     mode,
     outDir,
     page,
@@ -352,6 +357,38 @@ async function launchVsCode(input) {
 
   state.session = active;
   return active;
+}
+
+async function hide(app) {
+  await app.evaluate(({ app: main, BrowserWindow }) => {
+    const hide = (window) => {
+      if (window.isDestroyed()) {
+        return;
+      }
+
+      window.once("ready-to-show", () => {
+        if (!window.isDestroyed()) {
+          window.hide();
+        }
+      });
+      window.hide();
+    };
+
+    for (const window of BrowserWindow.getAllWindows()) {
+      hide(window);
+    }
+
+    main.on("browser-window-created", (_event, window) => hide(window));
+  });
+}
+
+async function windows() {
+  return activeSession().app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().map((window) => ({
+      title: window.getTitle(),
+      visible: window.isVisible(),
+    })),
+  );
 }
 
 function frames() {
@@ -469,17 +506,30 @@ async function kiloFrame(kind) {
 }
 
 async function saveScreenshot(input, path) {
+  if (activeSession().headless && !input.selector && !input.text && !input.frame) {
+    const client = await activeSession().page.context().newCDPSession(activeSession().page);
+    const result = await client.send("Page.captureScreenshot", {
+      captureBeyondViewport: input.fullPage ?? true,
+      format: "png",
+      fromSurface: true,
+    });
+    writeFileSync(path, Buffer.from(result.data, "base64"));
+    await client.detach();
+    return;
+  }
+
   if (input.selector || input.text) {
-    await locator(input).screenshot({ path });
+    await locator(input).screenshot({ animations: "disabled", path });
     return;
   }
 
   if (input.frame) {
-    await view(input.frame).locator("body").screenshot({ path });
+    await view(input.frame).locator("body").screenshot({ animations: "disabled", path });
     return;
   }
 
   await activeSession().page.screenshot({
+    animations: "disabled",
     fullPage: input.fullPage ?? true,
     path,
   });
@@ -915,6 +965,7 @@ server.registerTool(
     inputSchema: {
       appPath: z.string().optional(),
       build: z.boolean().optional(),
+      headless: z.boolean().optional(),
       mode: z.enum(["dev", "vsix"]).optional(),
       waitMs: z.number().int().positive().max(60000).optional(),
       workspace: z.string().optional(),
@@ -929,10 +980,12 @@ server.registerTool(
         appPath: active.appPath,
         extDir: active.extDir,
         frames: frames(),
+        headless: active.headless,
         mode: active.mode,
         title: await active.page.title(),
         userDir: active.userDir,
         vsix: active.vsix,
+        windows: await windows(),
         workspace: active.workspace,
       },
     );
@@ -956,11 +1009,13 @@ server.registerTool(
       appPath: active.appPath,
       extDir: active.extDir,
       frames: frames(),
+      headless: active.headless,
       mode: active.mode,
       text,
       url: active.page.url(),
       userDir: active.userDir,
       vsix: active.vsix,
+      windows: await windows(),
       workspace: active.workspace,
     });
   },
