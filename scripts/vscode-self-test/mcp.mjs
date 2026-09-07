@@ -4,11 +4,12 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { spawn } from "node:child_process";
-import { openSync, readFileSync } from "node:fs";
+import { closeSync, openSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import {
   delay,
+  inherited,
   ensureStateDir,
   isAlive,
   logPath,
@@ -16,7 +17,6 @@ import {
   ping,
   readState,
   removeState,
-  repo,
   request,
   root,
   scriptDir,
@@ -48,7 +48,7 @@ async function active(timeoutMs = 0) {
   }
 
   if (!isAlive(state.pid)) {
-    removeState();
+    removeState(state.token);
     return null;
   }
 
@@ -66,11 +66,12 @@ async function start() {
   const child = spawn(process.execPath, [join(scriptDir, "daemon.mjs")], {
     cwd: root,
     detached: true,
-    env: { ...process.env, SELF_TEST_REPO: repo },
+    env: inherited,
     stdio: ["ignore", fd, fd],
     windowsHide: true,
   });
   child.unref();
+  closeSync(fd);
 
   const started = Date.now();
   while (Date.now() - started <= 10000) {
@@ -131,7 +132,7 @@ server.registerTool(
   "daemon-status",
   {
     description:
-      "Show the status of the per-worktree VS Code self-test daemon.",
+      "Show the status of this session's VS Code self-test daemon.",
     inputSchema: {},
   },
   async () => {
@@ -155,7 +156,7 @@ server.registerTool(
   "stop-daemon",
   {
     description:
-      "Stop the per-worktree self-test daemon and any owned VS Code instance.",
+      "Stop this session's self-test daemon and any owned VS Code instance.",
     inputSchema: {},
   },
   async () => {
@@ -183,6 +184,7 @@ const tools = [
     "Build the extension, install or load it into an isolated VS Code instance, and launch it for testing. Headless mode hides VS Code windows while keeping the renderer available for Playwright.",
     {
       appPath: z.string().optional(),
+      userDir: z.string().optional(),
       build: z.boolean().optional(),
       headless: z.boolean().optional(),
       mode: z.enum(["dev", "vsix"]).optional(),
@@ -399,7 +401,7 @@ if (process.argv.includes("--self-check")) {
     command: process.execPath,
     args: [import.meta.filename],
     cwd: root,
-    env: { ...process.env, SELF_TEST_REPO: repo },
+    env: inherited,
     stderr: "inherit",
   });
   const client = new Client({ name: "self-check", version: "1.0.0" });
