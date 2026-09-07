@@ -9,7 +9,6 @@ import {
   closeSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   openSync,
   readFileSync,
   readdirSync,
@@ -18,11 +17,10 @@ import {
   writeFileSync,
   writeSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
-import { delimiter, dirname, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { z } from "zod";
-import { repo, root, scriptDir } from "./common.mjs";
+import { cleanup as remove, environment, inherited, root, scriptDir, settings, stateDir, temporary } from "./common.mjs";
 import { cfg } from "./config.mjs";
 
 const execFileP = promisify(execFile);
@@ -86,7 +84,7 @@ function clip(value, size) {
 }
 
 function temp(prefix) {
-  return mkdtempSync(join(tmpdir(), prefix));
+  return temporary(prefix);
 }
 
 function activeSession() {
@@ -110,10 +108,10 @@ function resolveOnPath(name) {
   return hit ?? null;
 }
 
-async function run(command, args, cwd) {
+async function run(command, args, cwd, env = process.env) {
   await execFileP(command, args, {
     cwd,
-    env: process.env,
+    env,
     maxBuffer: 32 * 1024 * 1024,
     windowsHide: true,
   });
@@ -130,7 +128,9 @@ function detectAppPath(appPath) {
   const candidates =
     process.platform === "darwin"
       ? [
+          "/Applications/Visual Studio Code.app/Contents/MacOS/Code",
           "/Applications/Visual Studio Code.app/Contents/MacOS/Electron",
+          "/Applications/Visual Studio Code - Insiders.app/Contents/MacOS/Code - Insiders",
           "/Applications/Visual Studio Code - Insiders.app/Contents/MacOS/Electron",
         ]
       : process.platform === "linux"
@@ -150,7 +150,8 @@ function detectAppPath(appPath) {
               join(program, "Microsoft VS Code Insiders", "Code - Insiders.exe"),
             ]
           : [];
-  const found = candidates.find((item) => existsSync(item)) ?? resolveOnPath("code") ?? resolveOnPath("code-insiders");
+  const found = candidates.find((item) => existsSync(item)) ??
+    (process.platform === "darwin" ? null : resolveOnPath("code") ?? resolveOnPath("code-insiders"));
   if (found) {
     return found;
   }
@@ -180,8 +181,6 @@ function detectCliPath(appPath) {
 }
 
 function writeSettings(userDir) {
-  const dir = join(userDir, "User");
-  mkdirSync(dir, { recursive: true });
   const value = {
     "editor.accessibilitySupport": "off",
     "extensions.autoCheckUpdates": false,
@@ -195,10 +194,7 @@ function writeSettings(userDir) {
     "workbench.tips.enabled": false,
     "window.commandCenter": false,
   };
-  writeFileSync(
-    join(dir, "settings.json"),
-    JSON.stringify({ ...value, ...cfg.settings }, null, 2) + "\n",
-  );
+  settings(userDir, { ...value, ...cfg.settings });
 }
 
 async function buildExtension() {
@@ -225,7 +221,7 @@ async function packageVsix(outDir) {
   return vsix;
 }
 
-async function installVsix(cliPath, userDir, extDir, vsix) {
+async function installVsix(cliPath, userDir, extDir, vsix, env) {
   await run(
     cliPath,
     [
@@ -238,6 +234,7 @@ async function installVsix(cliPath, userDir, extDir, vsix) {
       "--force",
     ],
     root,
+    env,
   );
 }
 
@@ -248,17 +245,12 @@ async function closeSession(cleanup) {
   }
 
   await discardProfile();
+  await active.app.close();
   state.session = null;
   state.console = [];
-  await active.app.close().catch(() => undefined);
 
   const removed = cleanup
-    ? [active.userDir, active.extDir, active.outDir]
-        .filter(Boolean)
-        .map((item) => {
-          rmSync(item, { recursive: true, force: true });
-          return item;
-        })
+    ? remove([active.keepUserDir ? null : active.userDir, active.extDir, active.outDir])
     : [];
 
   return {
@@ -278,85 +270,107 @@ async function launchVsCode(input) {
   const appPath = detectAppPath(input.appPath);
   const cliPath = mode === "vsix" ? detectCliPath(appPath) : null;
   const workspace = resolve(input.workspace ?? cfg.workspace);
-  const userDir = temp("vscode-self-test-user-");
-  const extDir = temp("vscode-self-test-ext-");
-  const outDir = mode === "vsix" ? temp("vscode-self-test-vsix-") : null;
-  const headless = input.headless ?? false;
-  const waitMs = input.waitMs ?? 5000;
+  const paths = [];
+  let app;
+  try {
+    const userDir = input.userDir ? resolve(input.userDir) : temp("vscode-self-test-user-");
+    const keepUserDir = Boolean(input.userDir);
+    if (!keepUserDir) paths.push(userDir);
+    const extDir = temp("vscode-self-test-ext-");
+    paths.push(extDir);
+    const outDir = mode === "vsix" ? temp("vscode-self-test-vsix-") : null;
+    if (outDir) paths.push(outDir);
+    const headless = input.headless ?? false;
+    const waitMs = input.waitMs ?? 5000;
+    const backend = keepUserDir
+      ? join(userDir, "vscode-self-test", basename(dirname(stateDir)), basename(stateDir))
+      : join(userDir, "backend");
+    const env = environment(backend);
 
-  writeSettings(userDir);
+    writeSettings(userDir);
 
-  if (input.build ?? true) {
-    await buildExtension();
-  }
-
-  const vsix = mode === "vsix" && outDir ? await packageVsix(outDir) : null;
-
-  if (vsix) {
-    await installVsix(cliPath, userDir, extDir, vsix);
-  }
-
-  const args = [
-    workspace,
-    `--extensions-dir=${extDir}`,
-    `--user-data-dir=${userDir}`,
-    "--skip-release-notes",
-  ];
-  if (mode === "dev") {
-    args.push(`--extensionDevelopmentPath=${root}`);
-    if (cfg.extensionId) {
-      args.push(`--disable-extension=${cfg.extensionId}`);
+    if (input.build ?? true) {
+      await buildExtension();
     }
-  }
 
-  const env = { ...process.env };
-  delete env.ELECTRON_RUN_AS_NODE;
-  const app = await electron.launch({
-    args,
-    env,
-    executablePath: appPath,
-  });
-  if (headless) {
-    await hide(app);
-  }
+    const vsix = mode === "vsix" && outDir ? await packageVsix(outDir) : null;
 
-  const page = await app.firstWindow();
-  state.console = [];
-  page.on("console", (message) => {
-    const location = message.location();
-    record({
-      source: location.url || page.url(),
-      text: message.text(),
-      time: new Date().toISOString(),
-      type: message.type(),
+    if (vsix) {
+      await installVsix(cliPath, userDir, extDir, vsix, env);
+    }
+
+    const args = [
+      workspace,
+      `--extensions-dir=${extDir}`,
+      `--user-data-dir=${userDir}`,
+      // Disposable tests must not initialize the host's native secret storage.
+      "--use-inmemory-secretstorage",
+      "--skip-release-notes",
+    ];
+    if (process.platform === "darwin") args.push("--use-mock-keychain");
+    if (mode === "dev") {
+      args.push(`--extensionDevelopmentPath=${root}`);
+      if (cfg.extensionId) {
+        args.push(`--disable-extension=${cfg.extensionId}`);
+      }
+    }
+
+    app = await electron.launch({
+      args,
+      env,
+      executablePath: appPath,
     });
-  });
-  page.on("pageerror", (error) => {
-    record({
-      source: page.url(),
-      text: error.stack || error.message,
-      time: new Date().toISOString(),
-      type: "pageerror",
+    state.session = { app, userDir, keepUserDir, extDir, outDir, mode, workspace };
+    if (headless) {
+      await hide(app);
+    }
+
+    const page = await app.firstWindow();
+    state.console = [];
+    page.on("console", (message) => {
+      const location = message.location();
+      record({
+        source: location.url || page.url(),
+        text: message.text(),
+        time: new Date().toISOString(),
+        type: message.type(),
+      });
     });
-  });
-  await page.waitForTimeout(waitMs);
+    page.on("pageerror", (error) => {
+      record({
+        source: page.url(),
+        text: error.stack || error.message,
+        time: new Date().toISOString(),
+        type: "pageerror",
+      });
+    });
+    await page.waitForTimeout(waitMs);
 
-  const active = {
-    app,
-    appPath,
-    cliPath,
-    extDir,
-    headless,
-    mode,
-    outDir,
-    page,
-    userDir,
-    vsix,
-    workspace,
-  };
+    const active = {
+      app,
+      appPath,
+      backend,
+      cliPath,
+      extDir,
+      headless,
+      keepUserDir,
+      mode,
+      outDir,
+      page,
+      userDir,
+      vsix,
+      workspace,
+    };
 
-  state.session = active;
-  return active;
+    state.session = active;
+    return active;
+  } catch (err) {
+    console.error("VS Code launch failed:", err);
+    if (app) await app.close();
+    state.session = null;
+    remove(paths);
+    throw err;
+  }
 }
 
 async function hide(app) {
@@ -964,6 +978,7 @@ server.registerTool(
       "Build the extension, install or load it into an isolated VS Code instance, and launch it for manual testing.",
     inputSchema: {
       appPath: z.string().optional(),
+      userDir: z.string().optional(),
       build: z.boolean().optional(),
       headless: z.boolean().optional(),
       mode: z.enum(["dev", "vsix"]).optional(),
@@ -978,6 +993,7 @@ server.registerTool(
       `Launched VS Code in ${active.mode} mode for ${active.workspace}.`,
       {
         appPath: active.appPath,
+        backend: active.backend,
         extDir: active.extDir,
         frames: frames(),
         headless: active.headless,
@@ -1007,6 +1023,7 @@ server.registerTool(
 
     return textResult("Current VS Code session state.", {
       appPath: active.appPath,
+      backend: active.backend,
       extDir: active.extDir,
       frames: frames(),
       headless: active.headless,
@@ -1541,7 +1558,7 @@ if (process.argv.includes("--self-check")) {
     command: process.execPath,
     args: [import.meta.filename],
     cwd: root,
-    env: { ...process.env, SELF_TEST_REPO: repo },
+    env: inherited,
     stderr: "inherit",
   });
   const client = new Client({ name: "self-check", version: "1.0.0" });

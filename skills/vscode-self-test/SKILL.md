@@ -11,6 +11,14 @@ node ~/.config/kilo/scripts/vscode-self-test/cli.mjs <command> [options]
 
 Run commands from the extension repository or a worktree containing `vscode-self-test.config.json`. Every command emits JSON.
 
+# Select a session
+
+Every operational command requires a stable session selector. The optional Kilo plugin at `~/.config/kilo/plugins/vscode-self-test.ts` sets `KILO_SELF_TEST_SESSION` from the current shell call, including a separate ID for each Task child. Restart the calling Kilo backend after installing the plugin. Until then, or with other clients, pass a unique `--session ID` on every command for that test.
+
+Selection order is `--session`, then `KILO_SELF_TEST_SESSION`, then `SELF_TEST_SESSION`. The flag works before or after the command. Missing selectors fail instead of controlling a worktree-wide instance. Do not reuse another agent's selector or generate a new ID for every command. Do not rely on a shell export from a previous tool call.
+
+For a manual run, add the same unique selector to each command below, for example `st start --session my-unique-test`. To pass text beginning with `--`, use an attached value such as `st type --value=--session=example`; otherwise ambiguous payloads are rejected before routing.
+
 # Lifecycle
 
 ```bash
@@ -25,6 +33,21 @@ st stop
 Use `--mode vsix` when packaged-extension behavior matters. Set `VSCODE_EXEC_PATH` if VS Code is not installed in a standard location.
 
 Pass `--headless true` for automated runs. This hides VS Code windows while keeping the renderer available to Playwright. Electron still needs a display server on Linux, so use Xvfb in displayless CI environments.
+
+# Parallel runs
+
+Each project/session pair has a separate daemon, VS Code profile, XDG directories, Kilo backend home, and active profile capture. Other extensions must respect these storage paths or provide their own backend isolation. Runtime isolation does not isolate workspace files or build outputs.
+
+- Build once before parallel tests and use `--build false` for every agent. Do not rebuild during those runs.
+- Keep generated user directories, or give each agent a different `--user-dir`. Explicit user directories are not removed during cleanup.
+- Keep generated artifact paths, or use different explicit screenshot and profile output paths.
+- Give mutating tests separate fixture workspaces with `--workspace`. Agent Manager tests can write workspace and Git state even with separate profiles.
+- Run performance comparisons separately, not concurrently with other tests.
+- Clean up only your own session with `stop-vscode --cleanup true`, then `stop`.
+
+For persistence tests, create a unique disposable `--user-dir` before the first launch and reuse it with the same session selector on every relaunch. Default generated profiles are fresh on each launch. Remove the explicit test directory only after its owning instance has stopped; the harness retains it even with `--cleanup true`.
+
+After changing harness scripts, close your test instance and stop its daemon before restarting. Discovery state is at `~/.config/vscode-extension-self-test/state/<project-hash>/<session-hash>/`, or below `SELF_TEST_STATE_DIR` with both hashes appended. A hard crash retains `owner.json`; confirm the owning processes have exited before removing that session's stale lock and state. Do not remove another agent's state or use broad process-name kills. Old project-only state is not adopted automatically.
 
 # Observe, act, verify
 

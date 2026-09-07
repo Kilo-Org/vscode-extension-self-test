@@ -6,7 +6,10 @@ import { join } from "node:path";
 import {
   logPath,
   output,
-  removeState,
+  claim,
+  release,
+  session,
+  inherited,
   repo,
   root,
   scriptDir,
@@ -16,6 +19,7 @@ import {
 } from "./common.mjs";
 
 const auth = token();
+claim(auth);
 const state = {
   closing: false,
   port: 0,
@@ -28,7 +32,7 @@ const transport = new StdioClientTransport({
   command: process.execPath,
   args: [join(scriptDir, "engine-mcp.mjs")],
   cwd: root,
-  env: { ...process.env, SELF_TEST_REPO: repo },
+  env: inherited,
   stderr: "inherit",
 });
 
@@ -65,6 +69,7 @@ function snapshot() {
     pid: process.pid,
     port: state.port,
     repo,
+    selector: session,
     session: state.session,
     startedAt: state.startedAt,
     statePath,
@@ -143,22 +148,33 @@ async function invoke(name, input) {
   return payload(result);
 }
 
+let pending = Promise.resolve();
+function enqueue(name, input) {
+  const result = pending.then(() => invoke(name, input));
+  pending = result.catch((err) => console.error(err));
+  return result;
+}
+
 async function shutdown() {
   if (state.closing) {
     return;
   }
 
   state.closing = true;
-  removeState();
-  await invoke("stop-vscode", { cleanup: true }).catch(() => undefined);
-  await client.close().catch(() => undefined);
+  await enqueue("stop-vscode", { cleanup: true }).catch((err) => console.error(err));
+  await client.close();
   await new Promise((resolve) => server.close(resolve));
+  release(auth);
   process.exit(0);
 }
 
 const server = createServer(async (req, res) => {
   try {
     if (unauthorized(req, res)) {
+      return;
+    }
+    if (state.closing) {
+      json(res, 503, { error: "Session is shutting down" });
       return;
     }
 
@@ -177,7 +193,7 @@ const server = createServer(async (req, res) => {
 
     if (req.method === "POST" && req.url === "/tool") {
       const input = await body(req);
-      const result = await invoke(input.name, input.arguments);
+      const result = await enqueue(input.name, input.arguments);
       json(res, 200, result);
       return;
     }
@@ -190,19 +206,25 @@ const server = createServer(async (req, res) => {
   }
 });
 
-await client.connect(transport);
-const tools = await client.listTools();
-state.tools = tools.tools.map((item) => item.name);
+try {
+  await client.connect(transport);
+  const tools = await client.listTools();
+  state.tools = tools.tools.map((item) => item.name);
 
-await new Promise((resolve) => {
-  server.listen(0, "127.0.0.1", () => {
-    const address = server.address();
-    state.port = typeof address === "object" && address ? address.port : 0;
-    persist();
-    output({ started: true, ...snapshot() });
-    resolve(undefined);
+  await new Promise((resolve) => {
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      state.port = typeof address === "object" && address ? address.port : 0;
+      persist();
+      output({ started: true, ...snapshot() });
+      resolve(undefined);
+    });
   });
-});
+} catch (err) {
+  await client.close();
+  release(auth);
+  throw err;
+}
 
 process.on("SIGINT", () => {
   void shutdown();

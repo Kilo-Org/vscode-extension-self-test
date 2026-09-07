@@ -1,22 +1,29 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { openSync } from "node:fs";
+import { closeSync, openSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { analyzeProfile } from "./profile-report.mjs";
-import {
+if (process.argv.length === 2 || (process.argv.length === 3 && ["help", "--help"].includes(process.argv[2]))) {
+  help();
+  process.exit(0);
+}
+
+const {
+  args,
+  inherited,
   delay,
   ensureStateDir,
   isAlive,
   logPath,
   output,
+  owned,
   ping,
   readState,
   removeState,
-  repo,
   request,
   root,
   scriptDir,
-} from "./common.mjs";
+} = await import("./common.mjs");
 
 function fail(message) {
   throw new Error(message);
@@ -37,7 +44,9 @@ function parse(argv) {
       continue;
     }
 
-    const [key, raw] = item.slice(2).split("=", 2);
+    const offset = item.indexOf("=");
+    const key = offset < 0 ? item.slice(2) : item.slice(2, offset);
+    const raw = offset < 0 ? undefined : item.slice(offset + 1);
     if (raw !== undefined) {
       result[key] = raw;
       continue;
@@ -126,7 +135,7 @@ async function active(timeoutMs = 0) {
   }
 
   if (!isAlive(state.pid)) {
-    removeState();
+    removeState(state.token);
     return null;
   }
 
@@ -144,11 +153,12 @@ async function start() {
   const child = spawn(process.execPath, [join(scriptDir, "daemon.mjs")], {
     cwd: root,
     detached: true,
-    env: { ...process.env, SELF_TEST_REPO: repo },
+    env: inherited,
     stdio: ["ignore", fd, fd],
     windowsHide: true,
   });
   child.unref();
+  closeSync(fd);
 
   const started = Date.now();
   while (Date.now() - started <= 10000) {
@@ -184,6 +194,15 @@ async function tool(name, input) {
 function help() {
   process.stdout.write(`vscode-self-test commands:
 
+  Required owner: --session ID, KILO_SELF_TEST_SESSION, or SELF_TEST_SESSION.
+  Precedence: explicit flag, Kilo environment, generic environment.
+  SELF_TEST_STATE_DIR is a base; repository/session hashes are appended.
+  Build once, then use launch-vscode --build false for parallel sessions.
+  Build outputs are shared, not session-isolated.
+  Legacy repo-only state is never reused. Inspect recorded processes and stop
+  them manually only after confirming ownership. Remove stale owner.json only
+  after all its owned processes have exited.
+
   start
   stop
   status
@@ -213,8 +232,8 @@ function help() {
 `);
 }
 
-const command = process.argv[2];
-const options = parse(process.argv.slice(3));
+const command = args[0];
+const options = parse(args.slice(1));
 
 if (!command || command === "help" || command === "--help") {
   help();
@@ -237,19 +256,12 @@ if (command === "stop") {
   await request(current.state, "/stop", {});
   const started = Date.now();
   while (Date.now() - started <= 5000) {
-    const next = await daemon(false);
-    if (!next) {
+    if (!owned(current.state.token) && !isAlive(current.state.pid)) {
       output({ stopped: true });
       process.exit(0);
     }
 
     await delay(200);
-  }
-
-  if (!isAlive(current.state.pid)) {
-    removeState();
-    output({ stopped: true, forced: true });
-    process.exit(0);
   }
 
   fail(`Timed out stopping self-test daemon ${current.state.pid}`);
@@ -267,6 +279,7 @@ if (command === "launch-vscode" || command === "restart-vscode") {
     build: bool(options, "build", true),
     headless: bool(options, "headless", false),
     mode: str(options, "mode", "dev"),
+    userDir: filepath(options, "user-dir"),
     waitMs: num(options, "wait-ms", 3000),
     workspace: options["workspace"] ? resolve(options["workspace"]) : undefined,
   });

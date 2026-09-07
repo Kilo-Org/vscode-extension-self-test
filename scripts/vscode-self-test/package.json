@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "self-check": "node self-check.mjs"
+    "self-check": "node self-check.mjs",
+    "test": "node --test isolation.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.25.2",

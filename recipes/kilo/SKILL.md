@@ -17,6 +17,26 @@ Run from any directory inside the kilocode repo or worktree. The scripts auto-de
 
 Every command outputs JSON to stdout.
 
+## Session isolation
+
+Every operational command requires a session selector. The optional Kilo plugin at `~/.config/kilo/plugins/vscode-self-test.ts` supplies `KILO_SELF_TEST_SESSION` from the current shell tool session, including a separate ID for each Task child. Restart the calling Kilo backend after installing the plugin. An existing agent can use an explicit selector until then.
+
+For a manual run or an agent without the plugin, choose one unique ID for the complete test and pass it on every command:
+
+```bash
+node ~/.config/kilo/scripts/vscode-self-test/cli.mjs start --session my-unique-test
+node ~/.config/kilo/scripts/vscode-self-test/cli.mjs launch-vscode --session my-unique-test --mode dev --build false
+node ~/.config/kilo/scripts/vscode-self-test/cli.mjs status --session my-unique-test
+```
+
+Selection order is `--session`, then `KILO_SELF_TEST_SESSION`, then `SELF_TEST_SESSION`. Reuse the selector for all interactions and cleanup. Do not generate a new ID for each command, use another agent's selector, or rely on a shell export from a previous tool call. Missing selectors fail instead of reconnecting to a worktree-wide daemon. For text beginning with `--`, use an attached value, for example `type --value=--session=example`.
+
+Each worktree/session pair owns a daemon, VS Code profile, backend storage, and active profile capture. Source files and build outputs remain shared. Build once before parallel tests and use `--build false` for all agents; do not rebuild during those runs. Give tests that modify `.kilo/agent-manager.json`, Git state, or workspace files separate disposable fixture workspaces via `--workspace`. Run performance comparisons one at a time.
+
+Keep generated user directories, or give each agent a different `--user-dir`. Explicit user directories are retained during cleanup. Explicit screenshot and profile output paths must also differ between sessions.
+
+For persistence tests, create a unique disposable `--user-dir` before the first launch and pass the same directory and session selector on every relaunch. Default generated profiles are fresh on each launch. Remove the explicit test directory only after the owning instance has stopped; the harness retains it even with `--cleanup true`.
+
 ---
 
 # Build first
@@ -81,7 +101,7 @@ If a feature has no opener, run the command or click the UI that opens it, then 
 ## Lifecycle
 
 ```bash
-start                                          # Start per-worktree daemon
+start                                          # Start this agent session's daemon
 stop                                           # Stop daemon and VS Code
 status                                         # Check daemon and session status
 launch-vscode [--mode dev|vsix] [--build true|false] [--headless true|false] [--workspace PATH]
@@ -149,7 +169,7 @@ printf '%s\n' "$OPEN"
 AM="$(printf '%s' "$OPEN" | jq -r '.structuredContent.frame.match')"
 
 # Confirm that this is Agent Manager, not the sidebar.
-st observe --frame "$AM" --path /tmp/agent-manager.png --max-chars 3000
+st observe --frame "$AM" --max-chars 3000
 ```
 
 If `jq` is unavailable, run `st open-agent-manager`, copy `structuredContent.frame.match`, and pass it manually. Do not use `frame.name` when it is `pending-frame`.
@@ -310,7 +330,7 @@ VS Code workspace-trust dialogs, onboarding, command palette, and notification t
 
 ```bash
 # Inspect outer workbench text and screenshot.
-st observe --path /tmp/vscode-outer.png --max-chars 3000
+st observe --max-chars 3000
 
 # Examples: use visible text or inspect DOM before clicking.
 st click --text "Trust" --exact
@@ -343,11 +363,11 @@ st() { node ~/.config/kilo/scripts/vscode-self-test/cli.mjs "$@"; }
 OPEN="$(st open-kilo --wait-ms 3000)"
 SIDEBAR="$(printf '%s' "$OPEN" | jq -r '.structuredContent.frame.match')"
 
-st observe --frame "$SIDEBAR" --path /tmp/kilo-sidebar.png --max-chars 3000
+st observe --frame "$SIDEBAR" --max-chars 3000
 st type --frame "$SIDEBAR" --selector 'textarea[placeholder*="Type a message"]' --value "hello world"
 st click --frame "$SIDEBAR" --selector '[aria-label="Send"]'
 st wait --frame "$SIDEBAR" --text "response" --state visible --timeout-ms 30000
-st observe --frame "$SIDEBAR" --path /tmp/kilo-sidebar-response.png --max-chars 5000
+st observe --frame "$SIDEBAR" --max-chars 5000
 st console --type error
 ```
 
@@ -364,12 +384,12 @@ st() { node ~/.config/kilo/scripts/vscode-self-test/cli.mjs "$@"; }
 OPEN="$(st open-agent-manager --wait-ms 5000)"
 AM="$(printf '%s' "$OPEN" | jq -r '.structuredContent.frame.match')"
 
-st observe --frame "$AM" --path /tmp/agent-manager.png --max-chars 3000
+st observe --frame "$AM" --max-chars 3000
 st click --frame "$AM" --selector 'textarea[placeholder*="Type a message"]'
 st type --frame "$AM" --selector 'textarea[placeholder*="Type a message"]' --value "hello world"
 st click --frame "$AM" --selector '[aria-label="Send"]'
 st wait --frame "$AM" --text "response" --state visible
-st screenshot --frame "$AM" --path /tmp/agent-manager-response.png
+st screenshot --frame "$AM"
 ```
 
 Do not send prompts during read-only profiling runs. This recipe is for explicit interactive E2E tests only.
@@ -408,13 +428,13 @@ Add scenario-specific marks between them:
 ```bash
 st() { node ~/.config/kilo/scripts/vscode-self-test/cli.mjs "$@"; }
 WORKSPACE="/path/to/workspace"
-OUT="/tmp/kilo-agent-manager-profile"
+OUT="$(mktemp -d "${TMPDIR:-/tmp}/kilo-agent-manager-profile.XXXXXX")"
 
 st start
 st launch-vscode --mode dev --build false --workspace "$WORKSPACE" --wait-ms 5000
 OPEN="$(st open-agent-manager --wait-ms 5000)"
 AM="$(printf '%s' "$OPEN" | jq -r '.structuredContent.frame.match')"
-st observe --frame "$AM" --path /tmp/agent-manager.png --max-chars 3000
+st observe --frame "$AM" --max-chars 3000
 ```
 
 Build first with `bun run compile` from `packages/kilo-vscode/` if source changed. Use `--build false` only when the current `dist/` bundle is already correct.
@@ -739,7 +759,9 @@ st stop-vscode --cleanup true
 st stop
 ```
 
-`stop-vscode --cleanup true` removes the isolated VS Code user-data, extension, and VSIX temp directories created by the harness. `stop` terminates the per-worktree daemon. If a daemon crash leaves stale state, inspect `~/.config/vscode-extension-self-test/state/<repo-hash>/state.json`, stop any surviving harness process, then remove only that stale harness state file before restarting.
+`stop-vscode --cleanup true` removes the generated runtime directories owned by the selected session. Explicit user directories are retained. `stop` terminates only that session's daemon. Discovery and ownership state live at `~/.config/vscode-extension-self-test/state/<repo-hash>/<session-hash>/`; `SELF_TEST_STATE_DIR` replaces the base, with both hashes appended.
+
+After a hard crash, inspect that session's `owner.json` and confirm all owned processes have exited before removing its stale lock and discovery state. Do not take over a lock because a status request times out. Old worktree-wide daemons are not adopted automatically. Confirm ownership before stopping an old process; never remove all harness state or use broad process-name kills.
 
 ## Before/after optimization loop
 
@@ -764,10 +786,10 @@ st() { node ~/.config/kilo/scripts/vscode-self-test/cli.mjs "$@"; }
 OPEN="$(st open-kilo-settings --wait-ms 4000)"
 SETTINGS="$(printf '%s' "$OPEN" | jq -r '.structuredContent.frame.match')"
 
-st observe --frame "$SETTINGS" --path /tmp/kilo-settings.png --max-chars 4000
+st observe --frame "$SETTINGS" --max-chars 4000
 st click --frame "$SETTINGS" --selector '[data-slot="tabs-trigger-wrapper"][data-value="providers"]'
 st wait --frame "$SETTINGS" --selector '[data-slot="tabs-trigger"][data-value="providers"][aria-selected="true"]' --state visible
-st observe --frame "$SETTINGS" --path /tmp/kilo-settings-providers.png --max-chars 4000
+st observe --frame "$SETTINGS" --max-chars 4000
 st console --type error
 ```
 
