@@ -6,10 +6,11 @@
   "vsix": { "command": ["bun", "x", "vsce", "package", "--no-dependencies", "--skip-license", "-o", "{outDir}/"] },
   "profile": { "markPrefix": "kilo." },
   "openers": {
-    "sidebarCommand": "Kilo Code (NEW): Focus on Kilo Code (NEW) View",
+    "sidebarActivityLabel": "^Kilo Code",
+    "sidebarCommand": "View: Focus on Kilo Code View",
     "agentManagerLabel": "Agent Manager",
     "agentManagerFrameSelector": ".am-layout [data-sidebar-id=\"local\"]",
-    "settingsSelector": "a[aria-label=\"Settings\"]",
+    "settingsSelector": ".title-actions a.action-label[aria-label=\"Settings\"]",
     "settingsFrameSelector": "[data-component=\"tabs\"][data-variant=\"settings\"]"
   }
 }

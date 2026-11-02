@@ -33,6 +33,10 @@ Selection order is `--session`, then `KILO_SELF_TEST_SESSION`, then `SELF_TEST_S
 
 Each worktree/session pair owns a daemon, VS Code profile, backend storage, and active profile capture. Source files and build outputs remain shared. Build once before parallel tests and use `--build false` for all agents; do not rebuild during those runs. Give tests that modify `.kilo/agent-manager.json`, Git state, or workspace files separate disposable fixture workspaces via `--workspace`. Run performance comparisons one at a time.
 
+The harness strips `KILO_SELF_TEST_SESSION`, `SELF_TEST_SESSION`, and `KILO_V2_PROFILE` from every launched instance, so a profile exported for a CLI test cannot be shared by parallel VS Code sessions.
+
+If a command fails with `Target page, context or browser has been closed`, the harness says that this session lost its own VS Code instance. Another session cannot close it: each session owns its own Electron app, CDP endpoint (an ephemeral port), daemon, and profile. The usual causes are a manual window close, an external `pkill` of Code/Electron, or a stopped daemon. Relaunch with `launch-vscode` and the same flags, or run `stop-vscode` then `stop` before starting again.
+
 Keep generated user directories, or give each agent a different `--user-dir`. Explicit user directories are retained during cleanup. Explicit screenshot and profile output paths must also differ between sessions.
 
 For persistence tests, create a unique disposable `--user-dir` before the first launch and pass the same directory and session selector on every relaunch. Default generated profiles are fresh on each launch. Remove the explicit test directory only after the owning instance has stopped; the harness retains it even with `--cleanup true`.
@@ -45,7 +49,7 @@ Build the extension before testing when your changes affect the packaged extensi
 
 | Changed area | Minimum reliable action |
 |---|---|
-| Webview SolidJS, CSS, commands, manifest, or extension host | Run `bun run compile` from `packages/kilo-vscode/`, then restart isolated VS Code |
+| Webview SolidJS, CSS, commands, manifest, or extension host | Run the package build (`bun run build` on v2, `bun run compile` on v1) from `packages/kilo-vscode/`, then restart isolated VS Code |
 | Packaged extension behavior | Launch with `--mode vsix` |
 | No source changes, only exploration | Reuse the current isolated VS Code session |
 
@@ -89,7 +93,7 @@ Use this loop for sidebar chat, settings, editor webviews, commands, and Agent M
 |---|---|---|
 | VS Code dialogs, notifications, command palette | None or `run-command` | Omit `--frame` |
 | Kilo sidebar chat | `open-kilo` | Returned `structuredContent.frame.match` |
-| Kilo settings editor | `open-kilo-settings` | Returned `structuredContent.frame.match` |
+| Kilo settings (v1 sidebar, v2 editor panel) | `open-kilo-settings` | Returned `structuredContent.frame.match` |
 | Agent Manager editor | `open-agent-manager` | Returned `structuredContent.frame.match` |
 
 If a feature has no opener, run the command or click the UI that opens it, then use `frames`, `snapshot`, and structural DOM queries to identify the correct webview.
@@ -152,8 +156,11 @@ The CLI resolves `--frame MATCH` with a first-match substring search over frame 
 |---|---|---|
 | VS Code outer workbench | VS Code page URL | Omit `--frame` only for workbench chrome |
 | Kilo sidebar | URL contains `purpose=webviewView` | Returned `open-kilo` `frame.match` |
-| Kilo settings editor | Inner URL contains `fake.html?id=<uuid>` | Returned `open-kilo-settings` `frame.match` |
+| Kilo settings, v1 | Sidebar frame URL contains `purpose=webviewView` | Returned `open-kilo-settings` `frame.match` |
+| Kilo settings, v2 | Inner URL contains `fake.html?id=<uuid>` | Returned `open-kilo-settings` `frame.match` |
 | Agent Manager editor tab | Inner URL contains `fake.html?id=<uuid>` | Returned `open-agent-manager` `frame.match` |
+
+Both settings versions render `[data-component="tabs"][data-variant="settings"]` at the settings root. v1 switches the sidebar to Settings in place; v2 opens the Settings editor panel. Use the returned `frame.match` rather than assuming which one applies.
 
 Agent Manager is the important exception. When the sidebar and Agent Manager are both open, `--frame "kilocode.kilo-code"` often reaches the sidebar instead of Agent Manager. For Agent Manager interaction and profiling, use the exact `fake.html?id=<uuid>` match returned by `open-agent-manager`.
 
@@ -204,6 +211,8 @@ open-kilo                                      # Focus Kilo sidebar
 open-agent-manager                             # Open Agent Manager tab
 open-kilo-settings                             # Open Kilo settings panel
 ```
+
+The openers click the activity bar item matching `openers.sidebarActivityLabel` and the visible view title action, instead of sending keyboard shortcuts or a v1-only command title. They work in both v1 and v2 builds and in `--headless true` windows, where the command palette does not receive focus. Each opener returns the exact settings or sidebar `frame.match` to use next.
 
 ## Debug
 
@@ -437,7 +446,7 @@ AM="$(printf '%s' "$OPEN" | jq -r '.structuredContent.frame.match')"
 st observe --frame "$AM" --max-chars 3000
 ```
 
-Build first with `bun run compile` from `packages/kilo-vscode/` if source changed. Use `--build false` only when the current `dist/` bundle is already correct.
+Build first with the package build (`bun run build` on v2, `bun run compile` on v1) from `packages/kilo-vscode/` if source changed. Use `--build false` only when the current `dist/` bundle is already correct.
 
 ## Discover stable worktree/session IDs
 
@@ -759,7 +768,7 @@ st stop-vscode --cleanup true
 st stop
 ```
 
-`stop-vscode --cleanup true` removes the generated runtime directories owned by the selected session. Explicit user directories are retained. `stop` terminates only that session's daemon. Discovery and ownership state live at `~/.config/vscode-extension-self-test/state/<repo-hash>/<session-hash>/`; `SELF_TEST_STATE_DIR` replaces the base, with both hashes appended.
+`stop-vscode --cleanup true` removes the generated runtime directories owned by the selected session. It retries while Electron helper processes release the profile and extension directories, and returns removed paths in `removed`. Directories appear in `remaining` only when they truly could not be removed. Explicit user directories are retained. `stop` terminates only that session's daemon. Discovery and ownership state live at `~/.config/vscode-extension-self-test/state/<repo-hash>/<session-hash>/`; `SELF_TEST_STATE_DIR` replaces the base, with both hashes appended.
 
 After a hard crash, inspect that session's `owner.json` and confirm all owned processes have exited before removing its stale lock and discovery state. Do not take over a lock because a status request times out. Old worktree-wide daemons are not adopted automatically. Confirm ownership before stopping an old process; never remove all harness state or use broad process-name kills.
 

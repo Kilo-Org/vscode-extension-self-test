@@ -241,22 +241,32 @@ async function installVsix(cliPath, userDir, extDir, vsix, env) {
 async function closeSession(cleanup) {
   const active = state.session;
   if (!active) {
-    return { removed: [] };
+    return { failed: [], removed: [] };
   }
 
   await discardProfile();
-  await active.app.close();
+  try {
+    await active.app.close();
+  } catch (error) {
+    // The app may already be gone after an external close or kill. Cleanup
+    // below still removes what it can, so a stale session never blocks launch.
+    console.error("VS Code close failed:", error);
+  }
   state.session = null;
   state.console = [];
 
-  const removed = cleanup
+  const result = cleanup
     ? remove([active.keepUserDir ? null : active.userDir, active.extDir, active.outDir])
-    : [];
+    : { failed: [], removed: [] };
+  if (result.failed.length) {
+    console.error("Cleanup left directories:", result.failed.join(", "));
+  }
 
   return {
     extDir: active.extDir,
     mode: active.mode,
-    removed,
+    removed: result.removed,
+    ...(result.failed.length ? { remaining: result.failed } : {}),
     userDir: active.userDir,
     vsix: active.vsix,
     workspace: active.workspace,
@@ -488,35 +498,42 @@ function opener(name) {
   return cfg.openers[name] ?? fail(`Missing openers.${name} in vscode-self-test.config.json.`);
 }
 
-async function kiloFrame(kind) {
-  const items = await kiloFrames();
-  const find = async (selector) =>
-    Promise.all(
-      items.map(async (item) => ({
-        item,
-        match: await item.frame
-          .locator(selector)
-          .count()
-          .then((count) => count > 0)
-          .catch(() => false),
-      })),
-    ).then((matches) => matches.find((item) => item.match)?.item);
-  const sidebar = items.find((item) => item.url.includes("purpose=webviewView"));
-  const sidebarID = sidebar ? new URL(sidebar.url).searchParams.get("id") : null;
-  const hit =
-    kind === "agentManager"
-      ? await find(opener("agentManagerFrameSelector"))
-      : kind === "settings"
-        ? await find(opener("settingsFrameSelector"))
-        : items.find((item) => sidebarID && item.url.includes(`fake.html?id=${sidebarID}`)) ?? sidebar;
+async function kiloFrame(kind, timeoutMs = 0) {
+  const started = Date.now();
+  for (;;) {
+    const items = await kiloFrames();
+    const find = async (selector) =>
+      Promise.all(
+        items.map(async (item) => ({
+          item,
+          match: await item.frame
+            .locator(selector)
+            .count()
+            .then((count) => count > 0)
+            .catch(() => false),
+        })),
+      ).then((matches) => matches.find((item) => item.match)?.item);
+    const sidebar = items.find((item) => item.url.includes("purpose=webviewView"));
+    const sidebarID = sidebar ? new URL(sidebar.url).searchParams.get("id") : null;
+    const hit =
+      kind === "agentManager"
+        ? await find(opener("agentManagerFrameSelector"))
+        : kind === "settings"
+          ? await find(opener("settingsFrameSelector"))
+          : items.find((item) => sidebarID && item.url.includes(`fake.html?id=${sidebarID}`)) ?? sidebar;
 
-  if (hit) {
-    return hit.frame;
+    if (hit) {
+      return hit.frame;
+    }
+
+    if (Date.now() - started >= timeoutMs) {
+      return fail(
+        `Kilo ${kind} frame not found. Known frames: ${JSON.stringify(items.map((item) => ({ index: item.index, name: item.name, url: item.url, text: clip(item.text, 200) })))}`,
+      );
+    }
+
+    await activeSession().page.waitForTimeout(250);
   }
-
-  return fail(
-    `Kilo ${kind} frame not found. Known frames: ${JSON.stringify(items.map((item) => ({ index: item.index, name: item.name, url: item.url, text: clip(item.text, 200) })))}`,
-  );
 }
 
 async function saveScreenshot(input, path) {
@@ -574,12 +591,52 @@ async function dismissWelcome() {
   return true;
 }
 
+async function activityBarIndex(page, source) {
+  return page
+    .locator(".activitybar a.action-label")
+    .evaluateAll((elements, pattern) => {
+      const test = new RegExp(pattern);
+      return elements
+        .map((element, index) => ({ index, label: element.getAttribute("aria-label") ?? "" }))
+        .filter((item) => test.test(item.label));
+    }, source)
+    .then((matches) => matches[0]?.index ?? -1)
+    .catch(() => -1);
+}
+
+// Prefer the activity bar over the command palette. Palette keys require OS
+// keyboard focus, which a headless (hidden) window does not have, and the view
+// container title differs between v1 ("Kilo Code (NEW)") and v2 ("Kilo Code (v2)").
+// The label is a regex source so one config covers both titles.
 async function openKiloSidebar(waitMs) {
   await dismissWelcome();
-  await runCommand(
-    opener("sidebarCommand"),
-    waitMs ?? 1500,
-  );
+  const page = activeSession().page;
+  const label = cfg.openers.sidebarActivityLabel;
+  if (!label) {
+    await runCommand(opener("sidebarCommand"), waitMs ?? 1500);
+    return;
+  }
+
+  const deadline = Date.now() + 10000;
+  let index = -1;
+  while (index < 0 && Date.now() < deadline) {
+    index = await activityBarIndex(page, label);
+    if (index < 0) await page.waitForTimeout(200);
+  }
+  if (index < 0) {
+    return fail(
+      `No activity bar item matches openers.sidebarActivityLabel ${JSON.stringify(label)}. Confirm the extension is installed and activated, or configure openers.sidebarCommand instead.`,
+    );
+  }
+
+  const icon = page.locator(".activitybar a.action-label").nth(index);
+  const shown = await icon.evaluate((element) => {
+    const item = element.closest(".action-item");
+    const sidebar = document.querySelector(".part.sidebar");
+    return item?.classList.contains("checked") === true && sidebar?.classList.contains("hidden") !== true;
+  });
+  if (!shown) await icon.click();
+  await page.waitForTimeout(waitMs ?? 1500);
 }
 
 function frameInfo(frame) {
@@ -591,11 +648,13 @@ function frameInfo(frame) {
 async function openAgentManager(waitMs) {
   await openKiloSidebar(1200);
   const page = activeSession().page;
-  const target = page.getByLabel(new RegExp(opener("agentManagerLabel"))).first();
+  const target = page
+    .getByLabel(new RegExp(opener("agentManagerLabel")))
+    .filter({ visible: true })
+    .first();
   await target.waitFor({ state: "visible", timeout: 10000 });
   await target.click();
-  await page.waitForTimeout(waitMs ?? 2500);
-  const frame = await kiloFrame("agentManager");
+  const frame = await kiloFrame("agentManager", waitMs ?? 2500);
 
   return {
     frame: frameInfo(frame),
@@ -606,11 +665,15 @@ async function openAgentManager(waitMs) {
 async function openKiloSettings(waitMs) {
   await openKiloSidebar(1200);
   const page = activeSession().page;
-  const target = page.locator(opener("settingsSelector")).first();
+  // Both v1 and v2 contribute a Settings title action for the Kilo view. v1
+  // swaps the sidebar to Settings in place; v2 opens the Settings editor panel.
+  const target = page
+    .locator(opener("settingsSelector"))
+    .filter({ visible: true })
+    .first();
   await target.waitFor({ state: "visible", timeout: 10000 });
   await target.click();
-  await page.waitForTimeout(waitMs ?? 2500);
-  const frame = await kiloFrame("settings");
+  const frame = await kiloFrame("settings", waitMs ?? 2500);
 
   return {
     frame: frameInfo(frame),
@@ -1174,7 +1237,7 @@ server.registerTool(
   },
   async (input) => {
     await openKiloSidebar(input.waitMs);
-    const frame = await kiloFrame("sidebar");
+    const frame = await kiloFrame("sidebar", 5000);
 
     return textResult("Focused the Kilo sidebar.", {
       frame: frameInfo(frame),
