@@ -108,7 +108,7 @@ Use `node ~/.config/kilo/scripts/vscode-self-test/cli.mjs help` for the complete
 
 Selection order is `--session`, then `KILO_SELF_TEST_SESSION`, then `SELF_TEST_SESSION`. A missing selector fails instead of controlling another agent's instance. The flag works before or after the command. Use attached values for payloads that begin with `--`, such as `type --value=--session=example`; a text payload must not change the selected session.
 
-Each project/session pair has its own daemon, VS Code profile, XDG directories, Kilo backend home, and active profile capture. Generated runtime paths are short enough for macOS IPC sockets. Shutdown and cleanup affect only the owning session. Other extensions must respect these storage paths or provide their own backend isolation.
+Each project/session pair has its own daemon, VS Code profile, XDG directories, Kilo backend home, and active profile capture. Generated runtime paths are short enough for macOS IPC sockets. Shutdown and cleanup affect only the owning session. The harness strips `KILO_SELF_TEST_SESSION`, `SELF_TEST_SESSION`, and `KILO_V2_PROFILE` from launched instances so a shell profile cannot be shared. Other extensions must respect these storage paths or provide their own backend isolation.
 
 - Build once before parallel runs, then launch each agent with `--build false`. Source files and build outputs remain shared. Do not rebuild while other agents test that build.
 - Keep generated profile directories, or use a different `--user-dir` for each agent. An explicit user directory is retained during cleanup.
@@ -121,6 +121,8 @@ Each project/session pair has its own daemon, VS Code profile, XDG directories, 
 Daemon discovery and ownership live under `~/.config/vscode-extension-self-test/state/<project-hash>/<session-hash>/`. `SELF_TEST_STATE_DIR` replaces the base directory; project and session hashes are still appended.
 
 After a hard crash, inspect that session's `owner.json` and confirm its owned processes have exited before removing its stale lock and discovery state. Do not take over a lock merely because a status request times out. Old project-only state is not adopted. Confirm ownership before stopping old processes; never delete all harness state or use broad process-name kills.
+
+A `Target page, context or browser has been closed` error means the session lost its own VS Code instance. Sessions cannot close each other's app, CDP endpoint, daemon, or profile. Relaunch with `launch-vscode`, or run `stop-vscode` then `stop`. Cleanup retries removal after an app exits; a directory appears in `remaining` only when it truly survives every attempt.
 
 ## MCP
 
@@ -145,6 +147,6 @@ The MCP adapter starts a project/session daemon automatically. Give each indepen
 | `vscode.cli` | Optional `code` CLI override for VSIX installation. |
 | `vscode.settings` | Additional isolated-profile VS Code settings. |
 | `profile.markPrefix` | Prefix for semantic performance marks, defaulting to `selftest.`. |
-| `openers` | Optional Kilocode recipe shortcuts for sidebar, settings, and Agent Manager openers. |
+| `openers` | Optional recipe shortcuts for sidebar, settings, and Agent Manager openers. `sidebarActivityLabel` is a regex source matched against activity bar `aria-label`; when set, it is preferred over `sidebarCommand` because it works in headless windows. |
 
 Environment overrides: `SELF_TEST_REPO`, `SELF_TEST_CONFIG`, `SELF_TEST_STATE_DIR`, `KILO_SELF_TEST_SESSION`, `SELF_TEST_SESSION`, `VSCODE_EXEC_PATH`, and `VSCODE_CLI_PATH`.

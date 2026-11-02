@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -228,6 +229,7 @@ test("backend environment isolates XDG, home, configuration, database and both s
     KILO_TEST_HOME: "/home",
     KILO_SELF_TEST_SESSION: "kilo",
     SELF_TEST_SESSION: "generic",
+    KILO_V2_PROFILE: "/shared-profile",
     ELECTRON_RUN_AS_NODE: "1",
     XDG_DATA_HOME: "/data",
   };
@@ -245,6 +247,7 @@ test("backend environment isolates XDG, home, configuration, database and both s
     "ELECTRON_RUN_AS_NODE",
     "KILO_SELF_TEST_SESSION",
     "SELF_TEST_SESSION",
+    "KILO_V2_PROFILE",
   ])
     assert.equal(a[key], undefined);
   assert.ok(a.KILO_CONFIG_DIR.startsWith(join(home, "a")));
@@ -264,13 +267,54 @@ test("generated profiles fit UNIX sockets and cleanup removes only owned directo
       assert.ok(Buffer.byteLength(join(a, "1.113-main.sock")) <= 103);
     assert.throws(() => common.cleanup([home]), /unowned/);
     assert.ok(existsSync(home));
-    common.cleanup([a]);
+    assert.deepEqual(common.cleanup([a]), { failed: [], removed: [a] });
     assert.equal(existsSync(a), false);
     assert.ok(existsSync(b));
   } finally {
     if (existsSync(a)) common.cleanup([a]);
     common.cleanup([b]);
   }
+});
+
+test(
+  "cleanup retries and reports only directories it cannot remove",
+  { skip: process.platform === "win32", timeout: 30000 },
+  () => {
+    const dir = common.temporary("vscode-self-test-busy-");
+    const locked = join(dir, "locked");
+    mkdirSync(locked);
+    writeFileSync(join(locked, "file"), "held");
+    chmodSync(locked, 0o500);
+    try {
+      const result = common.cleanup([dir], 2);
+      assert.deepEqual(result.removed, []);
+      assert.deepEqual(result.failed, [dir]);
+      assert.ok(existsSync(dir));
+    } finally {
+      chmodSync(locked, 0o700);
+    }
+    assert.deepEqual(common.cleanup([dir]), { failed: [], removed: [dir] });
+    assert.equal(existsSync(dir), false);
+  },
+);
+
+test("closed-target errors name the session and recovery, and leave other errors alone", () => {
+  for (const text of [
+    "Target page, context or browser has been closed",
+    "browserContext.newPage: Target closed",
+  ]) {
+    const explained = common.closedTargetText(text, {
+      session: "session-a",
+      userDir: "/tmp/vst-profile",
+    });
+    assert.match(explained, /"session-a" lost its VS Code instance/);
+    assert.match(explained, /Another harness session cannot close it/);
+    assert.match(explained, /Last profile: \/tmp\/vst-profile/);
+    assert.match(explained, /launch-vscode --session session-a/);
+    assert.match(explained, new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  const other = "locator.waitFor: Timeout 5000ms exceeded";
+  assert.equal(common.closedTargetText(other, { session: "a" }), other);
 });
 
 test(

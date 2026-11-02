@@ -72,13 +72,62 @@ export function temporary(prefix) {
   return dir;
 }
 
-export function cleanup(paths) {
-  return paths.filter(Boolean).map((dir) => {
+export function cleanup(paths, attempts = 15) {
+  const owned = paths.filter(Boolean);
+  for (const dir of owned) {
     if (!directories.has(dir)) throw new Error(`Refusing cleanup of unowned directory: ${dir}`);
-    rmSync(dir, { recursive: true, force: true });
-    directories.delete(dir);
-    return dir;
-  });
+  }
+  const removed = [];
+  const failed = [];
+  for (const dir of owned) {
+    if (removeTree(dir, attempts)) {
+      directories.delete(dir);
+      removed.push(dir);
+    } else {
+      failed.push(dir);
+    }
+  }
+  return { failed, removed };
+}
+
+// Electron helper processes can still hold files right after the app exits, so
+// a single rmSync can fail with ENOTEMPTY or EBUSY. Retry, and report only the
+// directories that are still present after every attempt.
+function removeTree(dir, attempts) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      rmSync(dir, { force: true, maxRetries: 2, recursive: true, retryDelay: 50 });
+    } catch {
+      // Retry below; a helper process may still hold the directory.
+    }
+    if (!existsSync(dir)) return true;
+    sleep(100);
+  }
+  return !existsSync(dir);
+}
+
+function sleep(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+const closedTarget = /Target page, context or browser has been closed|Target closed|Browser has been closed/i;
+
+// Playwright reports a closed Electron page with this generic message. Name the
+// affected session and explain that another session cannot own this browser, so
+// the user can recover instead of suspecting cross-session interference.
+export function closedTargetText(text, context = {}) {
+  if (!text || !closedTarget.test(text)) return text;
+  const session = context.session ?? "<unknown>";
+  const cli = join(scriptDir, "cli.mjs");
+  const details = [
+    `Self-test session ${JSON.stringify(session)} lost its VS Code instance: the page, context, or browser was closed.`,
+    "Another harness session cannot close it: each session owns its own Electron app, CDP endpoint, daemon, and profile.",
+  ];
+  if (context.userDir) details.push(`Last profile: ${context.userDir}.`);
+  details.push(
+    `The app was probably closed by hand, killed by an external pkill, or its daemon stopped. Recover with "node ${cli} launch-vscode --session ${session} ..." to start a fresh instance, or "node ${cli} stop-vscode --session ${session}" then "node ${cli} stop --session ${session}" to discard it.`,
+  );
+  return `${details.join(" ")}\n\nOriginal error: ${text}`;
 }
 
 export function ensureStateDir() {
@@ -147,6 +196,9 @@ export function environment(dir, source = process.env) {
   delete env.ELECTRON_RUN_AS_NODE;
   delete env.KILO_SELF_TEST_SESSION;
   delete env.SELF_TEST_SESSION;
+  // A v2 CLI profile chosen for the shell would otherwise be shared by every
+  // launched instance, defeating session isolation.
+  delete env.KILO_V2_PROFILE;
   env.KILO_TEST_HOME = join(dir, "home");
   mkdirSync(env.KILO_TEST_HOME, { recursive: true });
   for (const kind of ["CONFIG", "DATA", "STATE", "CACHE"]) {

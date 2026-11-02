@@ -4,6 +4,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { createServer } from "node:http";
 import { join } from "node:path";
 import {
+  closedTargetText,
   logPath,
   output,
   claim,
@@ -59,7 +60,14 @@ function payload(result) {
     images: images ?? [],
     isError: result.isError ?? false,
     structuredContent: result.structuredContent ?? null,
-    text: text?.trim() || null,
+    text:
+      (result.isError
+        ? closedTargetText(text, {
+            session,
+            userDir: state.session?.userDir,
+          })
+        : text
+      )?.trim() || null,
   };
 }
 
