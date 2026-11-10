@@ -7,7 +7,7 @@ import { cfg } from "./config.mjs";
 export const scriptDir = import.meta.dirname;
 
 const values = new Set(
-  "app-path mode user-dir wait-ms workspace categories frame interval cpu-path dir metadata-path trace-path limit metadata path max-chars title selector text name surface alt width button nth x y steps delta-x delta-y value keys state timeout-ms command filter type script".split(" "),
+  "app-path mode user-dir wait-ms workspace categories frame interval cpu-path dir metadata-path trace-path limit metadata path max-chars title selector text name surface alt width button nth x y steps delta-x delta-y value keys state timeout-ms command filter type script model provider variant terminal-command".split(" "),
 );
 
 export function select(argv, env = process.env) {
@@ -206,8 +206,13 @@ export function environment(dir, source = process.env) {
     mkdirSync(env[`XDG_${kind}_HOME`], { recursive: true });
   }
   env.KILO_CONFIG_DIR = join(env.XDG_CONFIG_HOME, "kilo");
+  // v2 reads KILO2_CONFIG_DIR instead of KILO_CONFIG_DIR. Pin it inside the owned
+  // backend so a launch can seed a selection in the directory the extension host
+  // and its server both read, in dev and VSIX mode alike.
+  env.KILO2_CONFIG_DIR = join(env.XDG_CONFIG_HOME, "kilo2");
   env.KILO_TEST_MANAGED_CONFIG_DIR = join(env.XDG_CONFIG_HOME, "managed");
   mkdirSync(env.KILO_CONFIG_DIR, { recursive: true });
+  mkdirSync(env.KILO2_CONFIG_DIR, { recursive: true });
   mkdirSync(env.KILO_TEST_MANAGED_CONFIG_DIR, { recursive: true });
   return env;
 }

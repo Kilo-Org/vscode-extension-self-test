@@ -251,6 +251,10 @@ test("backend environment isolates XDG, home, configuration, database and both s
   ])
     assert.equal(a[key], undefined);
   assert.ok(a.KILO_CONFIG_DIR.startsWith(join(home, "a")));
+  // v2 reads KILO2_CONFIG_DIR, so a launch can seed a selection there.
+  assert.ok(a.KILO2_CONFIG_DIR.startsWith(join(home, "a")));
+  assert.equal(a.KILO2_CONFIG_DIR, join(a.XDG_CONFIG_HOME, "kilo2"));
+  assert.equal(b.KILO2_CONFIG_DIR, join(b.XDG_CONFIG_HOME, "kilo2"));
   assert.ok(a.KILO_TEST_HOME.startsWith(join(home, "a")));
   assert.equal(a.PATH, source.PATH);
   assert.equal(source.KILO_DB, "/live.db");

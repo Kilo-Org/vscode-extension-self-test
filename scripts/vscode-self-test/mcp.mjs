@@ -188,8 +188,23 @@ const tools = [
       build: z.boolean().optional(),
       headless: z.boolean().optional(),
       mode: z.enum(["dev", "vsix"]).optional(),
+      model: z.string().optional(),
+      provider: z.string().optional(),
+      surface: z.enum(["none", "sidebar", "agent-manager", "settings", "terminal"]).optional(),
+      terminalCommand: z.string().optional(),
+      variant: z.string().optional(),
       waitMs: z.number().int().positive().max(60000).optional(),
       workspace: z.string().optional(),
+    },
+  ],
+  [
+    "vscode-select",
+    "Select the model and effort of the composer and report the picker-confirmed result, for a transcript tab opened after launch.",
+    {
+      frame: z.string().optional(),
+      model: z.string(),
+      provider: z.string().optional(),
+      variant: z.string().optional(),
     },
   ],
   [

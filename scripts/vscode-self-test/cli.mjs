@@ -207,6 +207,8 @@ function help() {
   stop
   status
   launch-vscode [--mode dev|vsix] [--build true|false] [--headless true|false] [--workspace PATH]
+                [--model PROVIDER/MODEL | --provider ID --model MODEL] [--variant NAME]
+                [--surface none|sidebar|agent-manager|settings|terminal] [--terminal-command CMD]
   stop-vscode [--cleanup true|false]
   profile-start [--frame MATCH] [--trace true|false] [--cpu true|false] [--interval MICROSECONDS]
   profile-stop [--dir DIR] [--trace-path FILE] [--cpu-path FILE] [--metadata-path FILE]
@@ -223,6 +225,7 @@ function help() {
   press --keys SHORTCUT
   wait [--selector CSS | --text TEXT] [--state visible|hidden|attached|detached]
   run-command --command TEXT
+  select --model PROVIDER/MODEL [--provider ID] [--variant NAME] [--frame MATCH]
   open-kilo
   open-agent-manager
   open-kilo-settings
@@ -279,7 +282,12 @@ if (command === "launch-vscode" || command === "restart-vscode") {
     build: bool(options, "build", true),
     headless: bool(options, "headless", false),
     mode: str(options, "mode", "dev"),
+    model: str(options, "model", undefined),
+    provider: str(options, "provider", undefined),
+    surface: str(options, "surface", undefined),
+    terminalCommand: str(options, "terminal-command", undefined),
     userDir: filepath(options, "user-dir"),
+    variant: str(options, "variant", undefined),
     waitMs: num(options, "wait-ms", 3000),
     workspace: options["workspace"] ? resolve(options["workspace"]) : undefined,
   });
@@ -457,6 +465,16 @@ if (command === "run-command") {
   await tool("vscode-run-command", {
     command: str(options, "command", options._[0]) ?? fail("Missing --command"),
     waitMs: num(options, "wait-ms", 1000),
+  });
+  process.exit(0);
+}
+
+if (command === "select") {
+  await tool("vscode-select", {
+    frame: str(options, "frame", undefined),
+    model: str(options, "model", undefined) ?? fail("Missing --model"),
+    provider: str(options, "provider", undefined),
+    variant: str(options, "variant", undefined),
   });
   process.exit(0);
 }

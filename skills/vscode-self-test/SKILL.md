@@ -34,6 +34,24 @@ Use `--mode vsix` when packaged-extension behavior matters. Set `VSCODE_EXEC_PAT
 
 Pass `--headless true` for automated runs. This hides VS Code windows while keeping the renderer available to Playwright. Electron still needs a display server on Linux, so use Xvfb in displayless CI environments.
 
+# Start on a selection and surface
+
+Open the app on the model, reasoning effort, and surface the test needs instead of spending turns in pickers:
+
+```bash
+st launch-vscode --mode dev --build false --model kilo/openrouter/free --variant high --surface sidebar
+```
+
+| Flag | Effect |
+|---|---|
+| `--model PROVIDER/MODEL` | Seeds the extension's isolated config before launch, then applies the model through the pickers once a composer opens. |
+| `--provider ID --model MODEL` | Same, for a bare model id with no `provider/` prefix. |
+| `--variant NAME` | Reasoning effort for that model. |
+| `--surface none\|sidebar\|agent-manager\|settings\|terminal` | Opens that surface after launch and returns its frame; a composer surface applies the selection. |
+| `--terminal-command CMD` | Types and runs a command in the terminal opened by `--surface terminal`. |
+
+Read `selection.requested`, `selection.configFile`, `selection.applied`, `selection.verified`, `selection.shown`, and `surface` from the launch result. `selection.applied.model` and `.variant` are `already`, `applied`, `missing` (not in the catalog, or the model has no such effort), `not-opened`, or `unconfirmed`; `selection.verified` is true only when both match; `selection.shown` holds the labels the composer ended on; `selection.note`, also appended to the result text, explains a mismatch. A composer that is already on another model is switched, which a config seed alone cannot do. Use `st select --model ... [--variant ...] [--frame MATCH]` to repeat the apply and check on a composer opened later. `--surface terminal` needs a visible window (`--headless false`).
+
 # Parallel runs
 
 Each project/session pair has a separate daemon, VS Code profile, XDG directories, Kilo backend home, and active profile capture. Other extensions must respect these storage paths or provide their own backend isolation. Runtime isolation does not isolate workspace files or build outputs.
@@ -74,6 +92,7 @@ type --value TEXT [--selector CSS | --text TEXT] [--clear] [--submit]
 press --keys SHORTCUT
 wait [--selector CSS | --text TEXT] [--frame MATCH]
 run-command --command TEXT
+select --model PROVIDER/MODEL [--provider ID] [--variant NAME] [--frame MATCH]
 console [--type error|warning|log]
 logs [--filter TEXT]
 evaluate --script JS [--frame MATCH]

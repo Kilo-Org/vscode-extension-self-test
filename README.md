@@ -104,6 +104,27 @@ node ~/.config/kilo/scripts/vscode-self-test/cli.mjs stop --session example-run
 
 Use `node ~/.config/kilo/scripts/vscode-self-test/cli.mjs help` for the complete CLI. Every operational command prints JSON. `--mode dev` loads the extension development directory. `--mode vsix` packages and installs a VSIX into the isolated profile. Pass `--headless true` to hide VS Code windows while keeping Playwright automation and screenshots available. Linux displayless CI environments still need Xvfb.
 
+### Start on a selection and surface
+
+`launch-vscode` can open the app on the model, reasoning effort, and surface a test needs, so a run spends no turns in pickers:
+
+```bash
+node ~/.config/kilo/scripts/vscode-self-test/cli.mjs launch-vscode --session example-run --mode dev --build false \
+  --model kilo/openrouter/free --variant high --surface sidebar
+```
+
+| Flag | Effect |
+|---|---|
+| `--model PROVIDER/MODEL` | Seeds the extension's isolated config before launch, then applies the model through the pickers once a composer opens. |
+| `--provider ID --model MODEL` | Same, for a bare model id with no `provider/` prefix. |
+| `--variant NAME` | Reasoning effort for that model. |
+| `--surface none\|sidebar\|agent-manager\|settings\|terminal` | Opens that surface after launch and returns its frame; a composer surface applies the selection. |
+| `--terminal-command CMD` | Types and runs a command in the terminal opened by `--surface terminal`. |
+
+The launch result reports `selection.requested`, `selection.configFile`, `selection.applied`, `selection.verified`, `selection.shown` and `surface`. With a composer open, the launch applies the selection through the pickers and reports what happened: `selection.applied.model` and `.variant` are `already`, `applied`, `missing` (not in the catalog, or the model has no such effort), `not-opened`, or `unconfirmed`; `selection.verified` is true only when both match; `selection.shown` holds the labels the composer ended on; `selection.note`, also appended to the result text, explains a mismatch. A composer already on another model (a restored session, or a seed the catalog rejected) is switched, which a config seed alone cannot do. `select --model PROVIDER/MODEL [--variant NAME] [--frame MATCH]` repeats the apply and check on a composer opened later, such as a transcript tab switched after launch.
+
+The seed writes `model` into the Kilo v2 global config (`<backend>/config/kilo2/kilo2.json`, pinned by `KILO2_CONFIG_DIR`). Another extension needs its own default mechanism; the picker confirmation is what makes the outcome authoritative. `--surface terminal` drives the command palette, so it needs a visible window (`--headless false`).
+
 ### Parallel Agents
 
 Selection order is `--session`, then `KILO_SELF_TEST_SESSION`, then `SELF_TEST_SESSION`. A missing selector fails instead of controlling another agent's instance. The flag works before or after the command. Use attached values for payloads that begin with `--`, such as `type --value=--session=example`; a text payload must not change the selected session.
