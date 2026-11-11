@@ -273,7 +273,302 @@ async function closeSession(cleanup) {
   };
 }
 
+// A launch-time model selection: `--model provider/model` (both ids may contain
+// `/`), `--provider` for a bare model id, and `--variant` for the reasoning
+// effort. It is written to the isolated v2 config, so the first draft starts on
+// it without anyone opening the pickers.
+function modelSelection(input) {
+  const requested = input.model?.trim();
+  if (!requested) {
+    if (input.provider?.trim()) fail("--provider needs --model.");
+    if (input.variant?.trim()) fail("--variant needs --model.");
+    return null;
+  }
+  if (requested.includes("#")) {
+    fail(`--model takes provider/model; pass the reasoning effort with --variant: ${JSON.stringify(requested)}.`);
+  }
+  const explicit = input.provider?.trim();
+  const slash = requested.indexOf("/");
+  if (!explicit && slash <= 0) {
+    fail(`--model must be provider/model, or pair --provider with a bare model: ${JSON.stringify(requested)}.`);
+  }
+  const variant = input.variant?.trim();
+  return {
+    providerID: explicit || requested.slice(0, slash),
+    model: explicit ? requested : requested.slice(slash + 1),
+    ...(variant ? { variant } : {}),
+  };
+}
+
+// Seed the isolated v2 global config with the selection. v2 reads `kilo2.json`
+// and `kilo2.jsonc` (the `.jsonc` wins), not v1's `kilo.json`. A reused
+// --user-dir can already hold a document, so merge into it instead of replacing it.
+function seedModelSelection(dir, selection) {
+  const jsonc = join(dir, "kilo2.jsonc");
+  const path = existsSync(jsonc) ? jsonc : join(dir, "kilo2.json");
+  const document = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
+  writeFileSync(path, JSON.stringify({ ...document, model: selection }, null, 2) + "\n");
+  return path;
+}
+
+// Reads the labels of the composer that accepts a prompt. Agent Manager shows an
+// intro composer before a session is selected, so its labels are read only from
+// a visible transcript wrapper.
+function composerLabels() {
+  const visible = (element) =>
+    element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden";
+  const chat = [...document.querySelectorAll(".am-chat-wrapper:not(.am-chat-wrapper-hidden)")].filter(visible);
+  const root = document.querySelector(".am-layout") ? chat[0] : document;
+  if (!root) {
+    return { agent: null, model: null, ready: false, variant: null };
+  }
+  const label = (selector) =>
+    [...root.querySelectorAll(selector)]
+      .filter(visible)
+      .map((element) => (element.textContent ?? "").trim())
+      .find(Boolean) ?? null;
+  return {
+    agent: label(".mode-switcher-trigger-label"),
+    model: label(".model-selector-trigger-label"),
+    ready: [...root.querySelectorAll("textarea.prompt-input")].some(visible),
+    variant: label(".thinking-selector-trigger-label"),
+  };
+}
+
+const triggers = 'button[data-slot="popover-trigger"]:has(.model-selector-trigger-label):visible';
+const effortTrigger = 'button[data-slot="popover-trigger"]:has(.thinking-selector-trigger-label):visible';
+
+// The part of a surface that holds a composer. A surface can open before its
+// composer mounts (Agent Manager shows its intro first), so wait for a scope that
+// has the model trigger. Agent Manager keeps one wrapper per visible transcript;
+// the sidebar keeps its selectors in the prompt container.
+async function composerScope(frame, timeoutMs = 8000) {
+  const started = Date.now();
+  const scope = async () => {
+    const chat = frame.locator(".am-chat-wrapper:not(.am-chat-wrapper-hidden)");
+    return (await chat.count().catch(() => 0))
+      ? chat.first()
+      : frame.locator(".prompt-input-container:visible").first();
+  };
+  for (;;) {
+    const current = await scope();
+    if (await current.locator(triggers).count().catch(() => 0)) return current;
+    if (Date.now() - started >= timeoutMs) return current;
+    await frame.page().waitForTimeout(250);
+  }
+}
+
+function modelKey(selection) {
+  return `model:${selection.providerID}/${selection.model}`;
+}
+
+// Pickers are portals that open on the trigger and close on Escape. A row click
+// can leave the expanded picker open on its preview, so close by state and let the
+// closing animation finish instead of assuming where focus is.
+async function closePopover() {
+  const page = activeSession().page;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const open = page.locator(".model-selector-popover:visible, .thinking-selector-list:visible");
+    if (!(await open.count().catch(() => 0))) return;
+    await page.keyboard.press("Escape").catch(() => undefined);
+    await open.first().waitFor({ state: "hidden", timeout: 1000 }).catch(() => undefined);
+  }
+}
+
+// Opens a composer picker and reports whether it opened. The trigger toggles, so a
+// picker still closing from a previous step would eat the click: retry once.
+async function openPicker(trigger, ready) {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await closePopover();
+    const clicked = await trigger.click({ timeout: 5000 }).then(() => true).catch(() => false);
+    if (clicked && (await ready())) return true;
+  }
+  return false;
+}
+
+// The row of a model in the open picker. The filtered list renders asynchronously
+// and is virtualized, so wait for the row instead of counting right after a fill.
+async function modelRow(frame, selection) {
+  const row = frame.locator(`.model-selector-item[role="treeitem"][data-key="${modelKey(selection)}"]`).first();
+  const present = await row
+    .waitFor({ state: "attached", timeout: 2000 })
+    .then(() => true)
+    .catch(() => false);
+  return present ? row : null;
+}
+
+async function filterModels(frame, selection) {
+  return frame
+    .locator(".model-selector-search")
+    .fill(`${selection.providerID}/${selection.model}`, { timeout: 3000 })
+    .then(() => true)
+    .catch(() => false);
+}
+
+// What the model picker says about the requested model: "true" when its row is
+// selected, "false" when another model is, "absent" when the catalog has no such
+// row, or null when the picker does not open.
+async function modelRowState(frame, selection) {
+  const root = await composerScope(frame);
+  const trigger = root.locator(triggers).first();
+  if (!(await trigger.count())) return null;
+  const search = frame.locator(".model-selector-search");
+  const opened = await openPicker(trigger, () =>
+    search.waitFor({ state: "visible", timeout: 3000 }).then(() => true).catch(() => false),
+  );
+  if (!opened) return null;
+  await filterModels(frame, selection);
+  const row = await modelRow(frame, selection);
+  const state = row ? await row.getAttribute("aria-selected") : "absent";
+  await closePopover();
+  return state;
+}
+
+const efforts = 'thinking-selector-item[role="option"]';
+
+// The displayed effort names are the ids with their first letter capitalized.
+async function effortIndex(frame, variant) {
+  const items = frame.locator(`.${efforts}`);
+  const names = await items.evaluateAll((nodes) =>
+    nodes.map((node) => (node.querySelector(".thinking-selector-item-name")?.textContent ?? "").trim().toLowerCase()),
+  );
+  return names.indexOf(variant.toLowerCase());
+}
+
+// What the effort picker says about the requested effort: "true", "false",
+// "absent" when the model has no such effort, or null when it does not open.
+async function variantRowState(frame, variant) {
+  const root = await composerScope(frame);
+  const trigger = root.locator(effortTrigger).first();
+  if (!(await trigger.count())) return "absent";
+  const items = frame.locator(`.${efforts}`);
+  const opened = await openPicker(trigger, () =>
+    items.first().waitFor({ state: "visible", timeout: 3000 }).then(() => true).catch(() => false),
+  );
+  if (!opened) return null;
+  const index = await effortIndex(frame, variant);
+  const state = index < 0 ? "absent" : (await items.nth(index).getAttribute("aria-selected")) === "true" ? "true" : "false";
+  await closePopover();
+  return state;
+}
+
+// Commits the model through the picker. The config seed only reaches new drafts,
+// so this is what gives a composer that is already on another model (a restored
+// session, or a failed seed) the requested one, and it proves the outcome instead
+// of reading a label.
+async function applyModel(frame, selection) {
+  const state = await modelRowState(frame, selection);
+  if (state === "true") return "already";
+  if (state === "absent") return "missing";
+  if (state === null) return "not-opened";
+  const root = await composerScope(frame);
+  const trigger = root.locator(triggers).first();
+  const search = frame.locator(".model-selector-search");
+  const opened = await openPicker(trigger, () =>
+    search.waitFor({ state: "visible", timeout: 3000 }).then(() => true).catch(() => false),
+  );
+  if (!opened || !(await filterModels(frame, selection))) return "unconfirmed";
+  const row = await modelRow(frame, selection);
+  if (!row) {
+    await closePopover();
+    return "missing";
+  }
+  await row.click({ timeout: 3000 }).catch(() => undefined);
+  // The expanded picker previews a row; its Select button commits. The collapsed
+  // picker commits on the row and shows no button.
+  const commit = frame.locator(".model-selector-popover .model-selector-item-select-btn").first();
+  const expanded = await commit
+    .waitFor({ state: "visible", timeout: 1500 })
+    .then(() => true)
+    .catch(() => false);
+  if (expanded) await commit.click({ timeout: 2000 }).catch(() => undefined);
+  await closePopover();
+  return (await modelRowState(frame, selection)) === "true" ? "applied" : "unconfirmed";
+}
+
+async function applyVariant(frame, variant) {
+  const state = await variantRowState(frame, variant);
+  if (state === "true") return "already";
+  if (state === "absent") return "missing";
+  if (state === null) return "not-opened";
+  const root = await composerScope(frame);
+  const trigger = root.locator(effortTrigger).first();
+  const items = frame.locator(`.${efforts}`);
+  const opened = await openPicker(trigger, () =>
+    items.first().waitFor({ state: "visible", timeout: 3000 }).then(() => true).catch(() => false),
+  );
+  if (!opened) return "unconfirmed";
+  const index = await effortIndex(frame, variant);
+  if (index >= 0) await items.nth(index).click({ timeout: 3000 }).catch(() => undefined);
+  await closePopover();
+  return (await variantRowState(frame, variant)) === "true" ? "applied" : "unconfirmed";
+}
+
+// The outcome sentence the launch reports when the composer did not end on the
+// requested selection.
+function selectionNote(requested, applied, shown) {
+  const label = shown?.model ? `the composer shows ${shown.model}` : "the composer is not showing a model";
+  const model = `${requested.providerID}/${requested.model}`;
+  if (applied?.model === "missing") return `Requested model ${model} is not in the catalog; ${label}.`;
+  if (applied?.model === "not-opened") return `Could not open the model picker to confirm ${model}; ${label}.`;
+  if (applied?.model === "unconfirmed") return `Could not confirm model ${model}; ${label}.`;
+  if (applied?.variant === "missing") return `Model ${model} has no ${requested.variant} effort; ${label} with ${shown?.variant ?? "its effort"}.`;
+  if (applied?.variant === "not-opened") return `Could not open the effort picker; ${label}.`;
+  if (applied?.variant === "unconfirmed") return `Could not confirm effort ${requested.variant}; ${label}.`;
+  return null;
+}
+
+// The frame a selection applies to: an explicit match, the surface the launch
+// opened, or the sidebar.
+async function selectionFrame(input) {
+  if (input.frame) return view(input.frame);
+  const opened = activeSession().surface?.frame?.match;
+  return opened ? view(opened) : kiloFrame("sidebar", 3000);
+}
+
+// Applies the launch selection in an opened composer and reads the labels it
+// ends on.
+async function applySelection(frame, selection) {
+  const applied = selection
+    ? {
+        model: await applyModel(frame, selection).catch(() => "unconfirmed"),
+        variant: selection.variant ? await applyVariant(frame, selection.variant).catch(() => "unconfirmed") : null,
+      }
+    : null;
+  const shown = await frame.evaluate(composerLabels).catch(() => null);
+  return { applied, shown };
+}
+
+// The surface a launch ends on, so a test starts where it acts instead of
+// driving the activity bar, editors, and terminal itself. The launch tool's
+// `surface` enum is the only validation; callers open only a real surface.
+async function openLaunchSurface(input, selection) {
+  const surface = input.surface;
+  const waitMs = input.waitMs ?? 3000;
+  if (surface === "terminal") {
+    await runCommand("Terminal: Create New Terminal", waitMs);
+    if (input.terminalCommand) {
+      await activeSession().page.keyboard.type(input.terminalCommand);
+      await activeSession().page.keyboard.press("Enter");
+      await activeSession().page.waitForTimeout(waitMs);
+    }
+    return { surface };
+  }
+  if (surface === "settings") {
+    return { frame: (await openKiloSettings(waitMs)).frame, surface };
+  }
+  if (surface === "agent-manager") {
+    await openAgentManager(waitMs);
+    const frame = await kiloFrame("agentManager", waitMs);
+    return { frame: frameInfo(frame), ...(await applySelection(frame, selection)), surface };
+  }
+  await openKiloSidebar(waitMs);
+  const frame = await kiloFrame("sidebar", waitMs);
+  return { frame: frameInfo(frame), ...(await applySelection(frame, selection)), surface };
+}
+
 async function launchVsCode(input) {
+  const selection = modelSelection(input);
   await closeSession(true);
 
   const mode = input.mode ?? "vsix";
@@ -296,6 +591,9 @@ async function launchVsCode(input) {
       ? join(userDir, "vscode-self-test", basename(dirname(stateDir)), basename(stateDir))
       : join(userDir, "backend");
     const env = environment(backend);
+    // Seed before launch: the extension host and its server read this directory
+    // when the first draft resolves its model.
+    const configFile = selection ? seedModelSelection(env.KILO2_CONFIG_DIR, selection) : null;
 
     writeSettings(userDir);
 
@@ -361,6 +659,7 @@ async function launchVsCode(input) {
       appPath,
       backend,
       cliPath,
+      configFile,
       extDir,
       headless,
       keepUserDir,
@@ -373,6 +672,20 @@ async function launchVsCode(input) {
     };
 
     state.session = active;
+    if (selection) active.selection = { applied: null, configFile, requested: selection, shown: null };
+    if (input.surface && input.surface !== "none") {
+      const opened = await openLaunchSurface(input, selection);
+      active.surface = { frame: opened.frame ?? null, name: opened.surface, shown: opened.shown ?? null };
+      if (selection) {
+        active.selection.applied = opened.applied;
+        active.selection.shown = opened.shown;
+        active.selection.verified =
+          Boolean(opened.applied) &&
+          ["already", "applied"].includes(opened.applied.model) &&
+          [null, "already", "applied"].includes(opened.applied.variant);
+        active.selection.note = opened.applied ? selectionNote(selection, opened.applied, opened.shown) : null;
+      }
+    }
     return active;
   } catch (err) {
     console.error("VS Code launch failed:", err);
@@ -383,27 +696,41 @@ async function launchVsCode(input) {
   }
 }
 
+// Electron can drop Playwright's evaluate promise while the window is still
+// starting ("Resulting promise was garbage collected"). Hiding is cosmetic for
+// automation, so retry and never fail the launch on it.
 async function hide(app) {
-  await app.evaluate(({ app: main, BrowserWindow }) => {
-    const hide = (window) => {
-      if (window.isDestroyed()) {
-        return;
-      }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const hidden = await app
+      .evaluate(hideWindows)
+      .then(() => true)
+      .catch(() => false);
+    if (hidden) return;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+}
 
-      window.once("ready-to-show", () => {
-        if (!window.isDestroyed()) {
-          window.hide();
-        }
-      });
-      window.hide();
-    };
-
-    for (const window of BrowserWindow.getAllWindows()) {
-      hide(window);
+function hideWindows({ app: main, BrowserWindow }) {
+  const hide = (window) => {
+    if (window.isDestroyed()) {
+      return;
     }
 
-    main.on("browser-window-created", (_event, window) => hide(window));
-  });
+    window.once("ready-to-show", () => {
+      if (!window.isDestroyed()) {
+        window.hide();
+      }
+    });
+    window.hide();
+  };
+
+  for (const window of BrowserWindow.getAllWindows()) {
+    hide(window);
+  }
+
+  main.on("browser-window-created", (_event, window) => hide(window));
+  // The evaluate result is serialized back to Playwright; hand it nothing.
+  return undefined;
 }
 
 async function windows() {
@@ -568,9 +895,23 @@ async function saveScreenshot(input, path) {
 
 async function runCommand(command, waitMs) {
   const page = activeSession().page;
-  await page.keyboard.press("F1");
   const target = page.locator(".quick-input-widget input").last();
-  await target.waitFor({ state: "visible", timeout: 5000 });
+  for (let attempt = 0; ; attempt++) {
+    // The palette opens from a renderer keybinding, which needs the window's
+    // keyboard focus. A window that just replaced another one can miss it, so
+    // focus the page and retry instead of failing the run.
+    await page.bringToFront().catch(() => undefined);
+    await page.evaluate(() => window.focus()).catch(() => undefined);
+    await page.keyboard.press("F1");
+    const open = await target
+      .waitFor({ state: "visible", timeout: 2000 })
+      .then(() => true)
+      .catch(() => false);
+    if (open) break;
+    if (attempt >= 2) {
+      fail("The command palette did not open. Focus the VS Code window and retry, or launch with --headless false.");
+    }
+  }
   await target.fill(`>${command}`);
   await page.waitForTimeout(500);
   await target.press("Enter");
@@ -1038,13 +1379,18 @@ server.registerTool(
   "launch-vscode",
   {
     description:
-      "Build the extension, install or load it into an isolated VS Code instance, and launch it for manual testing.",
+      "Build the extension, install or load it into an isolated VS Code instance, and launch it for manual testing. model/provider/variant preselect the first draft, then the opened composer confirms or commits it (a composer already on another model is switched). surface ends the launch on a named surface.",
     inputSchema: {
       appPath: z.string().optional(),
       userDir: z.string().optional(),
       build: z.boolean().optional(),
       headless: z.boolean().optional(),
       mode: z.enum(["dev", "vsix"]).optional(),
+      model: z.string().optional(),
+      provider: z.string().optional(),
+      surface: z.enum(["none", "sidebar", "agent-manager", "settings", "terminal"]).optional(),
+      terminalCommand: z.string().optional(),
+      variant: z.string().optional(),
       waitMs: z.number().int().positive().max(60000).optional(),
       workspace: z.string().optional(),
     },
@@ -1053,14 +1399,17 @@ server.registerTool(
     const active = await launchVsCode(input);
 
     return textResult(
-      `Launched VS Code in ${active.mode} mode for ${active.workspace}.`,
+      `Launched VS Code in ${active.mode} mode for ${active.workspace}.${active.selection?.note ? ` ${active.selection.note}` : ""}`,
       {
         appPath: active.appPath,
         backend: active.backend,
+        configFile: active.configFile,
         extDir: active.extDir,
         frames: frames(),
         headless: active.headless,
         mode: active.mode,
+        selection: active.selection ?? null,
+        surface: active.surface ?? null,
         title: await active.page.title(),
         userDir: active.userDir,
         vsix: active.vsix,
@@ -1224,6 +1573,30 @@ server.registerTool(
   async (input) => {
     const result = await stopProfile(input);
     return textResult("Stopped VS Code performance profiling.", result);
+  },
+);
+
+server.registerTool(
+  "vscode-select",
+  {
+    description:
+      "Select the model and effort of the composer in VS Code and report the picker-confirmed result. Use it after switching a transcript tab, where a launch-time selection no longer applies.",
+    inputSchema: {
+      frame: z.string().optional(),
+      model: z.string(),
+      provider: z.string().optional(),
+      variant: z.string().optional(),
+    },
+  },
+  async (input) => {
+    const selection = modelSelection(input);
+    const frame = await selectionFrame(input);
+    const result = await applySelection(frame, selection);
+
+    return textResult(
+      `Selected ${selection.providerID}/${selection.model}${selection.variant ? ` at ${selection.variant}` : ""}: ${result.applied.model}${result.applied.variant ? `, effort ${result.applied.variant}` : ""}.`,
+      { applied: result.applied, frame: frameInfo(frame), requested: selection, shown: result.shown },
+    );
   },
 );
 

@@ -76,6 +76,28 @@ If VS Code is not in a standard macOS install location, pass `--app-path /path/t
 
 ---
 
+# Start on a selection and surface
+
+Open the app on the model, reasoning effort, and surface the test acts on, so a run spends no turns in pickers:
+
+```bash
+st launch-vscode --mode dev --build false --model kilo/openrouter/free --variant high --surface sidebar
+```
+
+| Flag | Effect |
+|---|---|
+| `--model PROVIDER/MODEL` | Seeds `model` into the isolated v2 config (`<backend>/config/kilo2/kilo2.json`, `KILO2_CONFIG_DIR`), then applies it through the pickers once a composer opens. |
+| `--provider ID --model MODEL` | Same, for a bare model id with no `provider/` prefix. |
+| `--variant NAME` | Reasoning effort for that model. |
+| `--surface none\|sidebar\|agent-manager\|settings\|terminal` | Opens that surface after launch and returns `surface.frame.match`; a composer surface applies the selection. |
+| `--terminal-command CMD` | Types and runs a command in the terminal opened by `--surface terminal`. |
+
+Read `selection.requested`, `selection.configFile`, `selection.applied`, `selection.verified`, `selection.shown`, and `surface` from the launch result. `selection.applied.model` and `.variant` are `already`, `applied`, `missing` (not in the catalog, or the model has no such effort), `not-opened`, or `unconfirmed`; `selection.verified` is true only when both match; `selection.shown` holds the labels the composer ended on; `selection.note`, also appended to the result text, explains a mismatch. A composer already on another model — a restored Agent Manager session, or a seed the catalog rejected — is switched through the picker, so the selection holds for the next prompt. `select --model PROVIDER/MODEL [--variant NAME] [--frame MATCH]` repeats the apply and check for a transcript tab you switch to later.
+
+`--surface terminal` drives the command palette, so it needs a visible window (`--headless false`). A fresh Agent Manager profile shows its intro before a transcript; the launch waits for the composer to mount. `--model` takes the id from the picker (`data-key="model:PROVIDER/MODEL"`), never the display name.
+
+---
+
 # Test an arbitrary extension feature
 
 Use this loop for sidebar chat, settings, editor webviews, commands, and Agent Manager:
@@ -109,7 +131,10 @@ start                                          # Start this agent session's daem
 stop                                           # Stop daemon and VS Code
 status                                         # Check daemon and session status
 launch-vscode [--mode dev|vsix] [--build true|false] [--headless true|false] [--workspace PATH]
+               [--model PROVIDER/MODEL | --provider ID --model MODEL] [--variant NAME]
+               [--surface none|sidebar|agent-manager|settings|terminal] [--terminal-command CMD]
 stop-vscode [--cleanup true|false]
+select --model PROVIDER/MODEL [--provider ID] [--variant NAME] [--frame MATCH]
 ```
 
 Pass `--headless true` to launch VS Code with its windows hidden while keeping the renderer available to Playwright. This is useful for automated runs. Electron still needs a display server on Linux, so use Xvfb in displayless CI environments.
@@ -164,7 +189,7 @@ Both settings versions render `[data-component="tabs"][data-variant="settings"]`
 
 Agent Manager is the important exception. When the sidebar and Agent Manager are both open, `--frame "kilocode.kilo-code"` often reaches the sidebar instead of Agent Manager. For Agent Manager interaction and profiling, use the exact `fake.html?id=<uuid>` match returned by `open-agent-manager`.
 
-The `fake.html` frame is VS Code's generated inner webview frame, not a page you inject manually. `open-agent-manager` already disambiguates it structurally by finding a frame that contains `.am-layout [data-sidebar-id="local"]`. It returns `frame.match`, `frame.name`, and `frame.url` in JSON without depending on translated UI text. Use `frame.match`: multiple inner frames may share a non-unique name such as `pending-frame`.
+The `fake.html` frame is VS Code's generated inner webview frame, not a page you inject manually. `open-agent-manager` already disambiguates it structurally by finding the frame that contains `.am-layout`. Sidebar ids can be namespaced per project (`prj-<hash>:local`, `prj-<hash>:wt-…`), so match them by suffix or discover them from the live DOM instead of assuming bare `local`/`wt-…` values. It returns `frame.match`, `frame.name`, and `frame.url` in JSON without depending on translated UI text. Use `frame.match`: multiple inner frames may share a non-unique name such as `pending-frame`.
 
 ### Recommended Agent Manager opener
 
@@ -194,7 +219,7 @@ st observe --frame "fake.html?id=<unique-prefix>" --max-chars 3000
 st snapshot --frame "fake.html?id=<unique-prefix>" --max-chars 3000
 ```
 
-Use a short unique `fake.html?id=<prefix>` match only after checking `frames`. If multiple `fake.html` frames exist, do not use plain `--frame "fake.html"`; inspect candidates and select the one where `evaluate --script 'return !!document.querySelector(".am-layout [data-sidebar-id=local]")'` returns `true`.
+Use a short unique `fake.html?id=<prefix>` match only after checking `frames`. If multiple `fake.html` frames exist, do not use plain `--frame "fake.html"`; inspect candidates and select the one where `evaluate --script 'return !!document.querySelector(".am-layout")'` returns `true`.
 
 **Rules:**
 
@@ -293,7 +318,7 @@ Prefer locale-independent `data-value` selectors for settings navigation. Other 
 
 | Selector | Purpose |
 |---|---|
-| `[data-sidebar-id="local"]` | Local workspace card |
+| `[data-sidebar-id="local"]` | Local workspace card (current builds namespace ids as `prj-<hash>:local`) |
 | `[data-sidebar-id="wt-..."]` | Managed worktree card |
 | `[data-sidebar-id="ses_..."]` | Unassigned session card in the sidebar |
 | `[data-tab-id="ses_..."]` | Managed session transcript tab inside the selected worktree |

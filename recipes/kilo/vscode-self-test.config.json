@@ -9,7 +9,7 @@
     "sidebarActivityLabel": "^Kilo Code",
     "sidebarCommand": "View: Focus on Kilo Code View",
     "agentManagerLabel": "Agent Manager",
-    "agentManagerFrameSelector": ".am-layout [data-sidebar-id=\"local\"]",
+    "agentManagerFrameSelector": ".am-layout",
     "settingsSelector": ".title-actions a.action-label[aria-label=\"Settings\"]",
     "settingsFrameSelector": "[data-component=\"tabs\"][data-variant=\"settings\"]"
   }
