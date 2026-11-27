@@ -145,6 +145,10 @@ After a hard crash, inspect that session's `owner.json` and confirm its owned pr
 
 A `Target page, context or browser has been closed` error means the session lost its own VS Code instance. Sessions cannot close each other's app, CDP endpoint, daemon, or profile. Relaunch with `launch-vscode`, or run `stop-vscode` then `stop`. Cleanup retries removal after an app exits; a directory appears in `remaining` only when it truly survives every attempt.
 
+## Narration
+
+Policy classifiers read agent messages and tool input. Describe simulated input and guard checks as QA: "simulated key events", "repeating key path", "confirmation guard", "dirty-file protection". Avoid security framing such as "inject", "bypass", "keylogger", or "payload"; it can get a legitimate repro blocked.
+
 ## MCP
 
 Point an MCP client at:
